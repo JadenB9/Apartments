@@ -1,0 +1,45 @@
+:root {
+  --bg: #14161a;
+  --panel: #1c1f26;
+  --panel-2: #232732;
+  --border: #2c313c;
+  --text: #e8eaed;
+  --muted: #9aa0ac;
+  --accent: #4dabf7;
+  --apartments: #e8590c;
+  --food: #f03e3e;
+  --shopping: #845ef7;
+  --entertainment: #37b24d;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #app {
+  margin: 0;
+  height: 100%;
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+}
+
+#app {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  grid-template-rows: 1fr;
+}
+
+button { font-family: inherit; cursor: pointer; }
+
+a { color: var(--accent); }
+
+/* Scrollbars */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+@media (max-width: 760px) {
+  #app { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+}
