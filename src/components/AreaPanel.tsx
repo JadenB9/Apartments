@@ -4,11 +4,18 @@ import {
   clearSelectedTowns,
   isTownSelected,
   mapActions,
+  selectAllTowns,
   selectedTowns,
   setCountySelected,
+  setTownsSelected,
   toggleTown,
   townsByCounty,
+  townsWithApartments,
 } from "../store";
+
+// Towns with fewer apartments than this are folded into one "Other" row per
+// county so the list stays short.
+const MAJOR_TOWN_MIN = 8;
 
 // Apartment area drill-down: County → Town. Starts with nothing selected; the
 // map only shows apartments for the selected towns. Selecting a county toggles
@@ -34,6 +41,10 @@ export function AreaPanel() {
   const toggle = (k: string) =>
     setExpanded((e) => ({ ...e, [k]: !e[k] }));
 
+  const allTowns = townsWithApartments.value;
+  const allSelected = allTowns.length > 0 && allTowns.every((t) => selected.has(t));
+  const totalApts = [...counts.values()].reduce((s, c) => s + c, 0);
+
   return (
     <section class="area">
       <div class="area-head">
@@ -44,6 +55,22 @@ export function AreaPanel() {
           </button>
         ) : null}
       </div>
+
+      <label class="area-all">
+        <input
+          type="checkbox"
+          checked={allSelected}
+          ref={(el) => {
+            if (el)
+              (el as HTMLInputElement).indeterminate =
+                selected.size > 0 && !allSelected;
+          }}
+          onChange={() => (allSelected ? clearSelectedTowns() : selectAllTowns())}
+        />
+        <span>All areas</span>
+        <span class="chip">{totalApts}</span>
+      </label>
+
       {selected.size === 0 ? (
         <div class="area-hint">
           Pick a county or individual towns to place their apartments on the map.
@@ -83,25 +110,66 @@ export function AreaPanel() {
 
             {open ? (
               <div class="area-towns">
-                {towns.map((t) => (
-                  <div class="area-town" key={t.name}>
-                    <input
-                      type="checkbox"
-                      checked={isTownSelected(t.name)}
-                      onChange={() => toggleTown(t.name)}
-                      aria-label={`Show ${t.name} apartments`}
-                    />
-                    <button
-                      class="area-town-name"
-                      type="button"
-                      title="Zoom to this town"
-                      onClick={() => mapActions.value?.flyTo(t.lng, t.lat, 13)}
-                    >
-                      {t.name}
-                    </button>
-                    <span class="chip chip-sm">{counts.get(t.name) ?? 0}</span>
-                  </div>
-                ))}
+                {(() => {
+                  const sorted = [...towns].sort(
+                    (a, b) => (counts.get(b.name) ?? 0) - (counts.get(a.name) ?? 0),
+                  );
+                  const majors = sorted.filter(
+                    (t) => (counts.get(t.name) ?? 0) >= MAJOR_TOWN_MIN,
+                  );
+                  const others = sorted.filter(
+                    (t) => (counts.get(t.name) ?? 0) < MAJOR_TOWN_MIN,
+                  );
+                  const otherNames = others.map((t) => t.name);
+                  const otherApts = others.reduce(
+                    (s, t) => s + (counts.get(t.name) ?? 0),
+                    0,
+                  );
+                  const otherSel =
+                    otherNames.length > 0 && otherNames.every((n) => selected.has(n));
+                  return (
+                    <>
+                      {majors.map((t) => (
+                        <div class="area-town" key={t.name}>
+                          <input
+                            type="checkbox"
+                            checked={isTownSelected(t.name)}
+                            onChange={() => toggleTown(t.name)}
+                            aria-label={`Show ${t.name} apartments`}
+                          />
+                          <button
+                            class="area-town-name"
+                            type="button"
+                            title="Zoom to this town"
+                            onClick={() => mapActions.value?.flyTo(t.lng, t.lat, 13)}
+                          >
+                            {t.name}
+                          </button>
+                          <span class="chip chip-sm">{counts.get(t.name) ?? 0}</span>
+                        </div>
+                      ))}
+                      {others.length > 0 ? (
+                        <div class="area-town" key="__other__">
+                          <input
+                            type="checkbox"
+                            checked={otherSel}
+                            ref={(el) => {
+                              if (el)
+                                (el as HTMLInputElement).indeterminate =
+                                  !otherSel && otherNames.some((n) => selected.has(n));
+                            }}
+                            onChange={() => setTownsSelected(otherNames, !otherSel)}
+                            aria-label="Other small towns"
+                          />
+                          <span class="area-town-name area-other">
+                            Other ({others.length} small towns)
+                          </span>
+                          <span class="chip chip-sm">{otherApts}</span>
+                        </div>
+                      ) : null}
+                    </>
+                  );
+                })()}
               </div>
             ) : null}
           </div>
@@ -136,6 +204,19 @@ const styles = `
   color: var(--muted);
   line-height: 1.4;
 }
+.area-all {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+}
+.area-all input { accent-color: var(--accent); cursor: pointer; }
+.area-all span:nth-child(2) { flex: 1 1 auto; }
+.area-other { color: var(--muted); font-style: italic; }
 .area-county { border-top: 1px solid var(--border); }
 .area-county-head {
   display: flex;

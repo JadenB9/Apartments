@@ -26,12 +26,16 @@ import {
   bookmarks,
   categoryData,
   clearNearby,
+  distanceToFortMeadeMi,
   enabledCategories,
   isBookmarked,
   mapActions,
   nearbyFocus,
+  nearbyRadiusMi,
+  selectedCountyNames,
   selectedPlaceId,
   selectedTowns,
+  setTownsSelected,
   showNearby,
   toggleBookmark,
   towns,
@@ -136,9 +140,10 @@ function poiSourceFC(cat: CategoryId): GeoJSON.FeatureCollection {
   if (!fc) return EMPTY_FC;
   const focus = nearbyFocus.value;
   if (!focus) return fc as unknown as GeoJSON.FeatureCollection;
+  const radius = nearbyRadiusMi.value;
   const features = fc.features.filter((f) => {
     const [lng, lat] = f.geometry.coordinates;
-    return haversineMi(lng, lat, focus.lng, focus.lat) <= focus.radiusMi;
+    return haversineMi(lng, lat, focus.lng, focus.lat) <= radius;
   });
   return { type: "FeatureCollection", features: features as unknown as GeoJSON.Feature[] };
 }
@@ -275,6 +280,9 @@ function popupHTML(props: PlaceFeature["properties"]): string {
       tagRows.push(`<div>Levels: ${esc(tags.levels || tags["building:levels"])}</div>`);
     }
     if (tags.units) tagRows.push(`<div>Units: ${esc(tags.units)}</div>`);
+    tagRows.push(
+      `<div>🪖 ${distanceToFortMeadeMi(props.lat, props.lng).toFixed(1)} mi to Fort Meade</div>`,
+    );
     if (tags.website) {
       tagRows.push(
         `<div>Website: <a href="${esc(tags.website)}" target="_blank" rel="noopener">link</a></div>`,
@@ -296,7 +304,7 @@ function popupHTML(props: PlaceFeature["properties"]): string {
     const nbBtn = `<button type="button" class="mv-nearby${nearbyOn ? " on" : ""}" data-id="${esc(props.id)}" data-name="${esc(
       props.name || "Apartment",
     )}" data-lng="${props.lng}" data-lat="${props.lat}">${
-      nearbyOn ? "✕ Hide nearby" : "🍽 Food & fun within 10 mi"
+      nearbyOn ? "✕ Hide nearby" : "🍽 Food & fun nearby"
     }</button>`;
     return `<div class="mv-popup">
       <h3>${name}</h3>
@@ -390,9 +398,9 @@ export function MapView() {
         paint: {
           "circle-color": color,
           "circle-opacity": 0.85,
-          // Smaller bubbles when zoomed out.
-          "circle-radius": ["step", ["get", "point_count"], 10, 25, 13, 100, 16],
-          "circle-stroke-width": 1.5,
+          // Compact bubbles when zoomed out — even big groups stay small.
+          "circle-radius": ["step", ["get", "point_count"], 8, 30, 10, 150, 12],
+          "circle-stroke-width": 1.25,
           "circle-stroke-color": "rgba(255,255,255,0.85)",
         },
       });
@@ -564,14 +572,17 @@ export function MapView() {
           if (!id || !Number.isFinite(lng) || !Number.isFinite(lat)) return;
           if (nearbyFocus.value?.id === id) {
             clearNearby();
-            nb.textContent = "🍽 Food & fun within 10 mi";
+            nb.textContent = "🍽 Food & fun nearby";
             nb.classList.remove("on");
           } else {
-            showNearby({ id, name: nm, lng, lat, radiusMi: 10 });
+            showNearby({ id, name: nm, lng, lat });
+            const r = nearbyRadiusMi.value;
+            const dLat = r / 60;
+            const dLng = r / (60 * Math.cos((lat * Math.PI) / 180));
             map.fitBounds(
               [
-                [lng - 0.22, lat - 0.16],
-                [lng + 0.22, lat + 0.16],
+                [lng - dLng, lat - dLat],
+                [lng + dLng, lat + dLat],
               ],
               { padding: 30 },
             );
@@ -676,6 +687,103 @@ export function MapView() {
         })
         .catch(() => {});
 
+      // ---- County outlines: show the boundary of each selected county. ----
+      fetch(`${fmBase}data/counties.json`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((fc: GeoJSON.FeatureCollection | null) => {
+          if (!fc || map.getSource("src-counties")) return;
+          map.addSource("src-counties", { type: "geojson", data: fc });
+          // Insert below Fort Meade so the base stays prominent.
+          const before = map.getLayer("fort-meade-fill") ? "fort-meade-fill" : undefined;
+          map.addLayer(
+            {
+              id: "county-fill",
+              type: "fill",
+              source: "src-counties",
+              filter: ["in", ["get", "name"], ["literal", []]],
+              paint: { "fill-color": "#4dabf7", "fill-opacity": 0.05 },
+            },
+            before,
+          );
+          map.addLayer(
+            {
+              id: "county-outline",
+              type: "line",
+              source: "src-counties",
+              filter: ["in", ["get", "name"], ["literal", []]],
+              paint: {
+                "line-color": "#74c0fc",
+                "line-width": 2,
+                "line-dasharray": [4, 2],
+                "line-opacity": 0.9,
+              },
+            },
+            before,
+          );
+
+          const countyEffect = effect(() => {
+            const names = selectedCountyNames.value;
+            const f: ExpressionSpecification = ["in", ["get", "name"], ["literal", names]];
+            if (map.getLayer("county-fill")) map.setFilter("county-fill", f);
+            if (map.getLayer("county-outline")) map.setFilter("county-outline", f);
+          });
+          disposers.push(countyEffect);
+        })
+        .catch(() => {});
+
+      // ---- Highlight the selected/clicked place so it's obvious when zoomed
+      // out (a bright ring that never clusters and always renders). ----
+      map.addSource("src-selected", { type: "geojson", data: EMPTY_FC });
+      map.addLayer({
+        id: "selected-halo",
+        type: "circle",
+        source: "src-selected",
+        paint: {
+          "circle-radius": 13,
+          "circle-color": "rgba(255,212,59,0.18)",
+          "circle-stroke-color": "#ffd43b",
+          "circle-stroke-width": 3,
+        },
+      });
+      const selectedEffect = effect(() => {
+        const id = selectedPlaceId.value;
+        const src = map.getSource("src-selected") as GeoJSONSource | undefined;
+        if (!src) return;
+        const props = id ? fullPropsById(id) : null;
+        if (id && props) {
+          src.setData({
+            type: "FeatureCollection",
+            features: [
+              {
+                type: "Feature",
+                properties: {},
+                geometry: { type: "Point", coordinates: [props.lng, props.lat] },
+              },
+            ],
+          });
+        } else {
+          src.setData(EMPTY_FC);
+        }
+      });
+      disposers.push(selectedEffect);
+
+      // ---- Click a town label/dot to focus it: select it + reveal nearby. ----
+      function onTownClick(e: MapLayerMouseEvent): void {
+        const f = e.features?.[0];
+        if (!f) return;
+        const name = (f.properties as { name?: string }).name;
+        if (!name) return;
+        const [lng, lat] = (f.geometry as GeoJSON.Point).coordinates as [number, number];
+        setTownsSelected([name], true);
+        showNearby({ id: `town:${name}`, name, lng, lat });
+        map.flyTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), 13) });
+      }
+      for (const id of ["town-labels", "town-dots"]) {
+        map.on("click", id, onTownClick);
+        map.on("mouseenter", id, onEnter);
+        map.on("mouseleave", id, onLeave);
+      }
+
       // ---- Clear, bold corridor town labels (drawn on top). ----
       const townsEffect = effect(() => {
         const list = towns.value;
@@ -752,6 +860,7 @@ export function MapView() {
       // Narrow POI sources to the nearby radius (or restore full) + draw ring.
       const nearbyEffect = effect(() => {
         const focus = nearbyFocus.value;
+        const radius = nearbyRadiusMi.value;
         void categoryData.value;
         for (const cat of ["food", "shopping", "entertainment"] as CategoryId[]) {
           const src = map.getSource(srcId(cat)) as GeoJSONSource | undefined;
@@ -760,7 +869,7 @@ export function MapView() {
         // Radius ring.
         const ringSrc = map.getSource("src-nearby-ring") as GeoJSONSource | undefined;
         const ringData = focus
-          ? circlePolygon(focus.lng, focus.lat, focus.radiusMi)
+          ? circlePolygon(focus.lng, focus.lat, radius)
           : EMPTY_FC;
         if (ringSrc) {
           ringSrc.setData(ringData as GeoJSON.GeoJSON);

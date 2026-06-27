@@ -11,6 +11,28 @@ import type {
   Town,
 } from "./data/types";
 import { CATEGORIES } from "./data/taxonomy";
+import { FORT_MEADE_CENTER } from "./data/config";
+
+// Great-circle distance in miles.
+export function milesBetween(
+  aLng: number,
+  aLat: number,
+  bLng: number,
+  bLat: number,
+): number {
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const R = 3958.7613;
+  const dLat = toRad(bLat - aLat);
+  const dLng = toRad(bLng - aLng);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+export function distanceToFortMeadeMi(lat: number, lng: number): number {
+  return milesBetween(lng, lat, FORT_MEADE_CENTER[0], FORT_MEADE_CENTER[1]);
+}
 
 // ---- Loaded data ----
 export const categoriesMeta = signal<CategoriesPayload | null>(null);
@@ -75,9 +97,42 @@ export function setCountySelected(county: string, on: boolean): void {
   selectedTowns.value = next;
 }
 
+export function setTownsSelected(names: string[], on: boolean): void {
+  const next = new Set(selectedTowns.value);
+  for (const n of names) {
+    if (on) next.add(n);
+    else next.delete(n);
+  }
+  selectedTowns.value = next;
+}
+
+// Every town that actually has apartments (used by the "All areas" toggle).
+export const townsWithApartments = computed<string[]>(() => {
+  const counts = apartmentCountByTown.value;
+  return [...counts.entries()].filter(([, c]) => c > 0).map(([t]) => t);
+});
+
+export function selectAllTowns(): void {
+  selectedTowns.value = new Set(townsWithApartments.value);
+}
+
 export function clearSelectedTowns(): void {
   selectedTowns.value = new Set();
 }
+
+// Counties whose apartment-bearing towns are ALL selected — these get outlined
+// on the map so you can see the region you've picked.
+export const selectedCountyNames = computed<string[]>(() => {
+  const sel = selectedTowns.value;
+  const out: string[] = [];
+  for (const [county, towns] of townsByCounty.value) {
+    const withApts = towns.filter((t) => (apartmentCountByTown.value.get(t.name) ?? 0) > 0);
+    if (withApts.length > 0 && withApts.every((t) => sel.has(t.name))) {
+      out.push(county);
+    }
+  }
+  return out;
+});
 
 // ---- Bookmarks (persisted to localStorage) ----
 // Apartments the user has starred. Bookmarked apartments render in a distinct
@@ -99,6 +154,13 @@ export const bookmarks = signal<Set<string>>(loadBookmarks());
 export function isBookmarked(id: string): boolean {
   return bookmarks.value.has(id);
 }
+
+// Bookmarked apartments (for the sidebar list), regardless of area selection.
+export const bookmarkedApartments = computed<Apartment[]>(() => {
+  const bm = bookmarks.value;
+  if (bm.size === 0) return [];
+  return apartments.value.filter((a) => bm.has(a.id));
+});
 
 export function toggleBookmark(id: string): void {
   const next = new Set(bookmarks.value);
@@ -178,15 +240,18 @@ export const visibleApartments = computed<Apartment[]>(() => {
 });
 
 // ---- "Nearby" focus: show food/shopping/entertainment within a radius of a
-// chosen apartment. Null = off. ----
+// chosen point (an apartment or a town). Null = off. The radius is controlled
+// by the shared slider (nearbyRadiusMi). ----
 export interface NearbyFocus {
   id: string;
   name: string;
   lng: number;
   lat: number;
-  radiusMi: number;
 }
 export const nearbyFocus = signal<NearbyFocus | null>(null);
+
+// Radius for the nearby food/fun reveal, in miles (slider 0.5–10).
+export const nearbyRadiusMi = signal<number>(3);
 
 const NEARBY_CATEGORIES: CategoryId[] = ["food", "shopping", "entertainment"];
 

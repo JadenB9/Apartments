@@ -450,6 +450,58 @@ function countyOf(lat: number, lng: number, counties: County[]): string | undefi
   return undefined;
 }
 
+/** Douglas–Peucker simplification so county outlines are light to ship. */
+function rdp(points: Ring, eps: number): Ring {
+  if (points.length < 3) return points;
+  const distSq = (p: [number, number], a: [number, number], b: [number, number]) => {
+    const [x, y] = p;
+    const [x1, y1] = a;
+    const [x2, y2] = b;
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    if (dx === 0 && dy === 0) return (x - x1) ** 2 + (y - y1) ** 2;
+    let t = ((x - x1) * dx + (y - y1) * dy) / (dx * dx + dy * dy);
+    t = Math.max(0, Math.min(1, t));
+    const px = x1 + t * dx;
+    const py = y1 + t * dy;
+    return (x - px) ** 2 + (y - py) ** 2;
+  };
+  const keep = new Array(points.length).fill(false);
+  keep[0] = keep[points.length - 1] = true;
+  const stack: [number, number][] = [[0, points.length - 1]];
+  const epsSq = eps * eps;
+  while (stack.length) {
+    const [s, e] = stack.pop()!;
+    let dmax = 0;
+    let idx = -1;
+    for (let i = s + 1; i < e; i++) {
+      const d = distSq(points[i], points[s], points[e]);
+      if (d > dmax) {
+        dmax = d;
+        idx = i;
+      }
+    }
+    if (dmax > epsSq && idx !== -1) {
+      keep[idx] = true;
+      stack.push([s, idx], [idx, e]);
+    }
+  }
+  return points.filter((_, i) => keep[i]);
+}
+
+/** GeoJSON FeatureCollection of simplified county outlines. */
+function countiesFeatureCollection(counties: County[]): unknown {
+  const features = counties.map((c) => {
+    const rings = c.rings.map((r) => rdp(r, 0.0009));
+    const geometry =
+      rings.length === 1
+        ? { type: "Polygon", coordinates: [rings[0]] }
+        : { type: "MultiPolygon", coordinates: rings.map((r) => [r]) };
+    return { type: "Feature", properties: { name: c.name }, geometry };
+  });
+  return { type: "FeatureCollection", features };
+}
+
 // ---------------------------------------------------------------------------
 // Places (food / shopping / entertainment / apartments)
 // ---------------------------------------------------------------------------
@@ -780,6 +832,10 @@ async function main() {
     await writeJson("fort-meade.json", fortMeade);
   } else {
     console.warn("  !! Fort Meade boundary not found — skipping fort-meade.json");
+  }
+
+  if (counties.length) {
+    await writeJson("counties.json", countiesFeatureCollection(counties));
   }
 
   const counts = buildCounts(places);

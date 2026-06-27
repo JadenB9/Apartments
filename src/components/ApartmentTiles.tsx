@@ -2,6 +2,7 @@ import { useMemo, useState } from "preact/hooks";
 import type { Apartment } from "../data/types";
 import {
   bookmarks,
+  distanceToFortMeadeMi,
   mapActions,
   selectedPlaceId,
   selectedTowns,
@@ -132,6 +133,7 @@ function Tile({ apt, selected }: { apt: Apartment; selected: boolean }) {
         </button>
       </div>
       {apt.town ? <div class="apt-town">{apt.town}</div> : null}
+      <div class="apt-dist">🪖 {distanceToFortMeadeMi(apt.lat, apt.lng).toFixed(1)} mi to Fort Meade</div>
       <div class="apt-links">
         <LinkBtn href={links?.googleMaps} label="Maps" />
         <LinkBtn href={links?.apartmentsCom} label="Apts" />
@@ -248,6 +250,13 @@ const styles = `
 .apt-town {
   font-size: 11px;
   color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.apt-dist {
+  font-size: 10.5px;
+  color: var(--accent);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

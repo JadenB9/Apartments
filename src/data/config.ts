@@ -24,6 +24,10 @@ export const MAP_CENTER: [number, number] = [
 
 export const INITIAL_ZOOM = 10.5;
 
+// Approximate centroid of the Fort George G. Meade installation, used for the
+// "distance to Fort Meade" readout on each apartment.
+export const FORT_MEADE_CENTER: [number, number] = [-76.743, 39.102];
+
 // Town centroids in scope (used as fallbacks / for the towns panel zoom).
 // The authoritative list is generated into public/data/towns.json by the
 // fetch script; this is a curated seed of the corridor's notable places.
