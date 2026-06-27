@@ -146,6 +146,12 @@ out;`,
   way["landuse"="military"]["name"~"Meade",i](${b});
 );
 out geom;`,
+
+  // County boundaries (admin_level=6) so towns can be grouped by county in the
+  // area drill-down. `out geom` gives each member way's geometry to stitch.
+  counties: `[out:json][timeout:90];
+relation["boundary"="administrative"]["admin_level"="6"](${b});
+out geom;`,
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -398,6 +404,53 @@ function buildFortMeade(elements: OverpassElement[]): unknown | null {
 }
 
 // ---------------------------------------------------------------------------
+// Counties (assign each town to a county via point-in-polygon)
+// ---------------------------------------------------------------------------
+
+interface County {
+  name: string;
+  rings: Ring[];
+}
+
+function buildCounties(elements: OverpassElement[]): County[] {
+  const counties: County[] = [];
+  for (const el of elements) {
+    if (el.type !== "relation" || !el.members?.length) continue;
+    const name = el.tags?.name;
+    if (!name) continue;
+    const outerWays = el.members
+      .filter((m) => m.role === "outer" && m.geometry && m.geometry.length > 1)
+      .map((m) => m.geometry!.map((g) => [g.lon, g.lat] as [number, number]));
+    const rings = stitchRings(outerWays);
+    if (rings.length) counties.push({ name, rings });
+  }
+  return counties;
+}
+
+/** Ray-casting point-in-ring test. */
+function pointInRing(lng: number, lat: number, ring: Ring): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i][0];
+    const yi = ring[i][1];
+    const xj = ring[j][0];
+    const yj = ring[j][1];
+    const intersect =
+      yi > lat !== yj > lat &&
+      lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+function countyOf(lat: number, lng: number, counties: County[]): string | undefined {
+  for (const c of counties) {
+    if (c.rings.some((r) => pointInRing(lng, lat, r))) return c.name;
+  }
+  return undefined;
+}
+
+// ---------------------------------------------------------------------------
 // Places (food / shopping / entertainment / apartments)
 // ---------------------------------------------------------------------------
 
@@ -428,6 +481,9 @@ function normalize(
     entertainment: [],
   };
   const seen = new Set<string>();
+  // Only group under names that exist in our town list, so the area hierarchy
+  // never hides an apartment under an unknown town.
+  const townNames = new Set(towns.map((t) => t.name));
 
   // Order matters only for dedup precedence; all elements run through classify.
   const all = [
@@ -453,7 +509,11 @@ function normalize(
     const { category, subcategory } = classified;
     const name = deriveName(tags, category);
     const address = composeAddress(tags);
-    const town = tags["addr:city"] ?? nearestTown(coords.lat, coords.lng, towns);
+    const addrCity = tags["addr:city"];
+    const town =
+      addrCity && townNames.has(addrCity)
+        ? addrCity
+        : nearestTown(coords.lat, coords.lng, towns);
     const keptTags = pickTags(tags);
 
     const base: Place = {
@@ -560,10 +620,21 @@ async function main() {
   await sleep(POLITE_DELAY_MS);
 
   const fortMeadeRaw = await runOverpass("fortMeade", QUERIES.fortMeade);
+  await sleep(POLITE_DELAY_MS);
+
+  const countiesRaw = await runOverpass("counties", QUERIES.counties);
 
   // 2. Normalize.
   console.log("\nNormalizing…");
+  const counties = buildCounties(countiesRaw);
   const towns = buildTowns(townsRaw);
+  for (const t of towns) {
+    const county = countyOf(t.lat, t.lng, counties);
+    if (county) t.county = county;
+  }
+  console.log(
+    `  counties: ${counties.length} (${counties.map((c) => c.name).join(", ")})`,
+  );
   const places = normalize(
     {
       apartments: apartmentsRaw,

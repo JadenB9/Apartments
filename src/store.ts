@@ -20,20 +20,64 @@ export const apartments = signal<Apartment[]>([]);
 export const categoryData = signal<Partial<Record<CategoryId, FeatureCollection>>>({});
 
 // ---- Filters / selection ----
-// Enabled subcategory keys: `${categoryId}:${subId}`. Empty set for a category
-// means "all of that category hidden". We seed apartments on + everything else
-// off so the first paint is light.
-const seedFilters = (): Set<string> => {
-  const s = new Set<string>();
-  for (const sub of CATEGORIES.find((c) => c.id === "apartments")!.subcategories) {
-    s.add(`apartments:${sub.id}`);
-  }
-  return s;
-};
-export const activeFilters = signal<Set<string>>(seedFilters());
+// Enabled subcategory keys: `${categoryId}:${subId}` for food/shopping/
+// entertainment only. Apartments are driven by area selection (selectedTowns),
+// not subcategories. Everything starts OFF so nothing shows until the user
+// drills into an area / enables a layer.
+export const activeFilters = signal<Set<string>>(new Set());
 
 export const searchQuery = signal<string>("");
 export const selectedPlaceId = signal<string | null>(null);
+
+// ---- Apartment area selection (County → Town drill-down) ----
+// The set of town names whose apartments are shown. Empty = nothing shown.
+export const selectedTowns = signal<Set<string>>(new Set());
+
+// Towns grouped by county, each list sorted by name. Drives the area picker.
+export const townsByCounty = computed<Map<string, Town[]>>(() => {
+  const m = new Map<string, Town[]>();
+  for (const t of towns.value) {
+    const c = t.county ?? "Other";
+    if (!m.has(c)) m.set(c, []);
+    m.get(c)!.push(t);
+  }
+  for (const list of m.values()) list.sort((a, b) => a.name.localeCompare(b.name));
+  return m;
+});
+
+// Apartment counts per town (for the area picker badges).
+export const apartmentCountByTown = computed<Map<string, number>>(() => {
+  const m = new Map<string, number>();
+  for (const a of apartments.value) {
+    if (!a.town) continue;
+    m.set(a.town, (m.get(a.town) ?? 0) + 1);
+  }
+  return m;
+});
+
+export function isTownSelected(name: string): boolean {
+  return selectedTowns.value.has(name);
+}
+
+export function toggleTown(name: string): void {
+  const next = new Set(selectedTowns.value);
+  if (next.has(name)) next.delete(name);
+  else next.add(name);
+  selectedTowns.value = next;
+}
+
+export function setCountySelected(county: string, on: boolean): void {
+  const next = new Set(selectedTowns.value);
+  for (const t of townsByCounty.value.get(county) ?? []) {
+    if (on) next.add(t.name);
+    else next.delete(t.name);
+  }
+  selectedTowns.value = next;
+}
+
+export function clearSelectedTowns(): void {
+  selectedTowns.value = new Set();
+}
 
 // ---- Bookmarks (persisted to localStorage) ----
 // Apartments the user has starred. Bookmarked apartments render in a distinct
@@ -113,11 +157,15 @@ export function toggleCategory(category: CategoryId, on: boolean): void {
   activeFilters.value = next;
 }
 
-// Filtered apartment list for the tiles panel (search + viewport aware).
+// Filtered apartment list for the tiles panel: selected areas ∩ search ∩
+// viewport. Nothing selected => empty list.
 export const visibleApartments = computed<Apartment[]>(() => {
+  const sel = selectedTowns.value;
+  if (sel.size === 0) return [];
   const q = searchQuery.value.trim().toLowerCase();
   const bounds = viewportBounds.value;
   return apartments.value.filter((a) => {
+    if (!a.town || !sel.has(a.town)) return false;
     if (q && !a.name.toLowerCase().includes(q) && !(a.town ?? "").toLowerCase().includes(q)) {
       return false;
     }
@@ -128,6 +176,33 @@ export const visibleApartments = computed<Apartment[]>(() => {
     return true;
   });
 });
+
+// ---- "Nearby" focus: show food/shopping/entertainment within a radius of a
+// chosen apartment. Null = off. ----
+export interface NearbyFocus {
+  id: string;
+  name: string;
+  lng: number;
+  lat: number;
+  radiusMi: number;
+}
+export const nearbyFocus = signal<NearbyFocus | null>(null);
+
+const NEARBY_CATEGORIES: CategoryId[] = ["food", "shopping", "entertainment"];
+
+// Reveal all food/shopping/entertainment within the focus radius. Enables those
+// categories (the map lazy-loads + shows them); the map narrows their data to
+// the radius and draws a ring.
+export function showNearby(focus: NearbyFocus): void {
+  nearbyFocus.value = focus;
+  for (const cat of NEARBY_CATEGORIES) toggleCategory(cat, true);
+}
+
+export function clearNearby(): void {
+  const had = nearbyFocus.value;
+  nearbyFocus.value = null;
+  if (had) for (const cat of NEARBY_CATEGORIES) toggleCategory(cat, false);
+}
 
 // Helper to know whether a feature passes the active subcategory filter.
 export function featurePassesFilter(f: PlaceFeature): boolean {

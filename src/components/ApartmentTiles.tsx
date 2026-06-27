@@ -1,30 +1,79 @@
+import { useMemo, useState } from "preact/hooks";
 import type { Apartment } from "../data/types";
 import {
   bookmarks,
   mapActions,
   selectedPlaceId,
+  selectedTowns,
   toggleBookmark,
   visibleApartments,
 } from "../store";
 
 const MAX_TILES = 300;
 
-// Responsive grid of apartment tiles, filtered to the visible viewport + search
-// via the `visibleApartments` computed. Clicking a tile selects + flies the map.
+type SortKey = "area" | "name";
+
+// Responsive grid of apartment tiles for the selected areas (∩ search ∩
+// viewport), with sort + bookmarked-only controls. Clicking a tile selects +
+// flies the map.
 export function ApartmentTiles() {
-  const all = visibleApartments.value;
-  const selected = selectedPlaceId.value;
-  const total = all.length;
-  const shown = total > MAX_TILES ? all.slice(0, MAX_TILES) : all;
+  const [sort, setSort] = useState<SortKey>("area");
+  const [bookmarkedOnly, setBookmarkedOnly] = useState(false);
+
+  const base = visibleApartments.value; // subscribe
+  const bm = bookmarks.value; // subscribe
+  const selected = selectedPlaceId.value; // subscribe
+  const anyArea = selectedTowns.value.size > 0; // subscribe
+
+  const list = useMemo(() => {
+    let arr = bookmarkedOnly ? base.filter((a) => bm.has(a.id)) : base.slice();
+    arr.sort((a, b) =>
+      sort === "name"
+        ? a.name.localeCompare(b.name)
+        : (a.town ?? "").localeCompare(b.town ?? "") || a.name.localeCompare(b.name),
+    );
+    return arr;
+  }, [base, bm, sort, bookmarkedOnly]);
+
+  const total = list.length;
+  const shown = total > MAX_TILES ? list.slice(0, MAX_TILES) : list;
   const overflow = total - shown.length;
 
   return (
     <section class="apt-panel">
       <div class="apt-panel-header">
-        Apartments ({total} visible)
+        <span>Apartments{anyArea ? ` (${total})` : ""}</span>
+        {anyArea ? (
+          <div class="apt-controls">
+            <label class="apt-bm-only">
+              <input
+                type="checkbox"
+                checked={bookmarkedOnly}
+                onChange={() => setBookmarkedOnly((v) => !v)}
+              />
+              ★ only
+            </label>
+            <select
+              class="apt-sort"
+              value={sort}
+              onChange={(e) => setSort(e.currentTarget.value as SortKey)}
+              aria-label="Sort apartments"
+            >
+              <option value="area">Sort: Area</option>
+              <option value="name">Sort: Name</option>
+            </select>
+          </div>
+        ) : null}
       </div>
-      {total === 0 ? (
-        <div class="apt-empty">No apartments in view. Zoom out or clear the search.</div>
+
+      {!anyArea ? (
+        <div class="apt-empty">Select an area above to list its apartments.</div>
+      ) : total === 0 ? (
+        <div class="apt-empty">
+          {bookmarkedOnly
+            ? "No bookmarked apartments in view."
+            : "No apartments in view. Zoom out or widen the area."}
+        </div>
       ) : (
         <div class="apt-grid">
           {shown.map((apt) => (
@@ -110,11 +159,34 @@ function LinkBtn({ href, label }: { href?: string; label: string }) {
 const styles = `
 .apt-panel { border-top: 1px solid var(--border); }
 .apt-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   padding: 9px 10px;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--text);
   background: var(--panel);
+}
+.apt-controls { display: flex; align-items: center; gap: 8px; font-weight: 400; }
+.apt-bm-only {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.apt-bm-only input { accent-color: var(--bookmark); cursor: pointer; }
+.apt-sort {
+  font-size: 11px;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 4px;
+  cursor: pointer;
 }
 .apt-empty {
   padding: 12px 10px;

@@ -4,11 +4,10 @@
 // source/layer set per category, a clickable apartments layer, and wires itself
 // into the shared signal store (filters, selection, viewport, mapActions).
 //
-// NOTE: This uses CARTO's public full-color Voyager raster tiles, which are
-// keyless. The documented faster upgrade is to self-host a pmtiles vector
-// extract of the corridor (pmtiles@3 is already a dependency) and swap the
-// `carto` raster source for a `pmtiles://` vector source + vector style — that
-// removes the per-tile network round-trips and renders crisper at all zooms.
+// NOTE: This uses Esri's public World Imagery raster tiles (keyless) plus Esri
+// reference overlays for roads/labels. The documented faster upgrade is to
+// self-host a pmtiles extract of the corridor (pmtiles@3 is already a
+// dependency) and swap these raster sources for a vector style.
 
 import { useEffect, useRef } from "preact/hooks";
 import { effect } from "@preact/signals";
@@ -26,10 +25,14 @@ import {
   activeFilters,
   bookmarks,
   categoryData,
+  clearNearby,
   enabledCategories,
   isBookmarked,
   mapActions,
+  nearbyFocus,
   selectedPlaceId,
+  selectedTowns,
+  showNearby,
   toggleBookmark,
   towns,
   viewportBounds,
@@ -37,36 +40,47 @@ import {
 import { loadCore, loadCategory } from "../data/loader";
 import { CATEGORIES, CATEGORY_BY_ID } from "../data/taxonomy";
 import { MAP_BOUNDS, MAP_CENTER, INITIAL_ZOOM } from "../data/config";
-import type {
-  CategoryId,
-  FeatureCollection,
-  PlaceFeature,
-} from "../data/types";
+import type { CategoryId, PlaceFeature } from "../data/types";
 
 const CATEGORY_IDS: CategoryId[] = CATEGORIES.map((c) => c.id);
 
-// Keyless nature/terrain raster basemap (OpenTopoMap) — greenery, forests,
-// water and relief instead of a road-dominated street map.
+// Keyless real-satellite basemap: Esri World Imagery + transparent reference
+// overlays (roads + place/street labels) for a Google-style hybrid — realistic
+// aerial imagery with enough labelling to navigate.
+const ESRI = "https://server.arcgisonline.com/ArcGIS/rest/services";
 const BASEMAP_STYLE: StyleSpecification = {
   version: 8,
   // Keyless public glyph endpoint so our symbol layers (town labels, the Fort
   // Meade label, cluster counts) can render text over the raster basemap.
   glyphs: "https://fonts.openmaptiles.org/{fontstack}/{range}.pbf",
   sources: {
-    topo: {
+    imagery: {
+      type: "raster",
+      tiles: [`${ESRI}/World_Imagery/MapServer/tile/{z}/{y}/{x}`],
+      tileSize: 256,
+      maxzoom: 19,
+      attribution: "Esri, Maxar, Earthstar Geographics, © OpenStreetMap",
+    },
+    transportation: {
+      type: "raster",
+      tiles: [`${ESRI}/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}`],
+      tileSize: 256,
+      maxzoom: 19,
+    },
+    places: {
       type: "raster",
       tiles: [
-        "https://a.tile.opentopomap.org/{z}/{x}/{y}.png",
-        "https://b.tile.opentopomap.org/{z}/{x}/{y}.png",
-        "https://c.tile.opentopomap.org/{z}/{x}/{y}.png",
+        `${ESRI}/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}`,
       ],
       tileSize: 256,
-      maxzoom: 17,
-      attribution:
-        "© OpenTopoMap (CC-BY-SA), © OpenStreetMap contributors",
+      maxzoom: 19,
     },
   },
-  layers: [{ id: "topo", type: "raster", source: "topo" }],
+  layers: [
+    { id: "imagery", type: "raster", source: "imagery" },
+    { id: "transportation", type: "raster", source: "transportation" },
+    { id: "places", type: "raster", source: "places" },
+  ],
 };
 
 // Single font (no comma-joined composite) the openmaptiles glyph server serves
@@ -90,13 +104,68 @@ function bookmarkRadiusExpr(ids: string[]): ExpressionSpecification {
   return ["case", ["in", ["get", "id"], ["literal", ids]], 7.5, 6];
 }
 
-// Categories that draw clustered circles. Apartments are intentionally NOT
-// clustered — every building shows as its own dot at all zooms.
-const CLUSTERED: Record<CategoryId, boolean> = {
-  apartments: false,
-  food: true,
-  shopping: true,
-  entertainment: true,
+const EMPTY_FC: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
+
+// Great-circle distance in miles.
+function haversineMi(aLng: number, aLat: number, bLng: number, bLat: number): number {
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const R = 3958.7613; // earth radius, miles
+  const dLat = toRad(bLat - aLat);
+  const dLng = toRad(bLng - aLng);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+// Apartments limited to the currently selected towns (empty when none selected).
+function selectedApartmentFC(): GeoJSON.FeatureCollection {
+  const fc = categoryData.value.apartments;
+  const sel = selectedTowns.value;
+  if (!fc || sel.size === 0) return EMPTY_FC;
+  const features = fc.features.filter((f) => {
+    const t = f.properties.town;
+    return !!t && sel.has(t);
+  });
+  return { type: "FeatureCollection", features: features as unknown as GeoJSON.Feature[] };
+}
+
+// POI category data, narrowed to the nearby radius when a focus is active.
+function poiSourceFC(cat: CategoryId): GeoJSON.FeatureCollection {
+  const fc = categoryData.value[cat];
+  if (!fc) return EMPTY_FC;
+  const focus = nearbyFocus.value;
+  if (!focus) return fc as unknown as GeoJSON.FeatureCollection;
+  const features = fc.features.filter((f) => {
+    const [lng, lat] = f.geometry.coordinates;
+    return haversineMi(lng, lat, focus.lng, focus.lat) <= focus.radiusMi;
+  });
+  return { type: "FeatureCollection", features: features as unknown as GeoJSON.Feature[] };
+}
+
+function sourceDataFor(cat: CategoryId): GeoJSON.FeatureCollection {
+  return cat === "apartments" ? selectedApartmentFC() : poiSourceFC(cat);
+}
+
+// A circle polygon (for the nearby radius ring), miles → ring of lng/lat points.
+function circlePolygon(lng: number, lat: number, radiusMi: number): GeoJSON.Feature {
+  const pts: [number, number][] = [];
+  const latR = radiusMi / 69; // ~69 mi per degree latitude
+  const lngR = radiusMi / (69 * Math.cos((lat * Math.PI) / 180));
+  for (let i = 0; i <= 64; i++) {
+    const a = (i / 64) * 2 * Math.PI;
+    pts.push([lng + lngR * Math.cos(a), lat + latR * Math.sin(a)]);
+  }
+  return { type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [pts] } };
+}
+
+// Per-category clustering config. Apartments use a tight radius + low max-zoom
+// so bubbles stay local and break into individual dots quickly when you zoom in.
+const CLUSTER_CFG: Record<CategoryId, { radius: number; maxZoom: number }> = {
+  apartments: { radius: 38, maxZoom: 12 },
+  food: { radius: 50, maxZoom: 14 },
+  shopping: { radius: 50, maxZoom: 14 },
+  entertainment: { radius: 50, maxZoom: 14 },
 };
 
 const POPUP_STYLE_ID = "mapview-popup-style";
@@ -149,6 +218,19 @@ function ensurePopupStyles(): void {
 }
 .mv-popup .mv-bm:hover { background: #d7e7f8; }
 .mv-popup .mv-bm.on { color: #fff; background: #1971c2; border-color: #1971c2; }
+.mv-popup .mv-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+.mv-popup .mv-actions .mv-bm { margin: 0; }
+.mv-popup .mv-nearby {
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #2b8a3e;
+  background: #e9f6ec;
+  border: 1px solid #a3d9b1;
+  border-radius: 6px;
+}
+.mv-popup .mv-nearby:hover { background: #dcf0e1; }
+.mv-popup .mv-nearby.on { color: #fff; background: #2b8a3e; border-color: #2b8a3e; }
 `;
   document.head.appendChild(el);
 }
@@ -210,11 +292,17 @@ function popupHTML(props: PlaceFeature["properties"]): string {
     const bmBtn = `<button type="button" class="mv-bm${marked ? " on" : ""}" data-id="${esc(props.id)}">${
       marked ? "★ Bookmarked" : "☆ Bookmark"
     }</button>`;
+    const nearbyOn = nearbyFocus.value?.id === props.id;
+    const nbBtn = `<button type="button" class="mv-nearby${nearbyOn ? " on" : ""}" data-id="${esc(props.id)}" data-name="${esc(
+      props.name || "Apartment",
+    )}" data-lng="${props.lng}" data-lat="${props.lat}">${
+      nearbyOn ? "✕ Hide nearby" : "🍽 Food & fun within 10 mi"
+    }</button>`;
     return `<div class="mv-popup">
       <h3>${name}</h3>
       ${where ? `<p class="mv-sub">${where}</p>` : ""}
       ${tagRows.length ? `<div class="mv-tags">${tagRows.join("")}</div>` : ""}
-      ${bmBtn}
+      <div class="mv-actions">${bmBtn}${nbBtn}</div>
       ${linkBtns}
     </div>`;
   }
@@ -279,64 +367,55 @@ export function MapView() {
     const disposers: Array<() => void> = [];
 
     // ---- Adds a clustered source + 3 layers for one category. ----
-    function installCategory(cat: CategoryId, data: FeatureCollection): void {
+    function installCategory(cat: CategoryId): void {
       if (installedRef.current.has(cat)) return;
       if (map.getSource(srcId(cat))) return;
       const color = CATEGORY_BY_ID[cat].color;
-      const clustered = CLUSTERED[cat];
+      const cfg = CLUSTER_CFG[cat];
 
       map.addSource(srcId(cat), {
         type: "geojson",
-        data: data as unknown as GeoJSON.FeatureCollection,
-        ...(clustered
-          ? { cluster: true, clusterRadius: 50, clusterMaxZoom: 14 }
-          : {}),
+        data: sourceDataFor(cat),
+        cluster: true,
+        clusterRadius: cfg.radius,
+        clusterMaxZoom: cfg.maxZoom,
       });
 
-      if (clustered) {
-        // Cluster circles.
-        map.addLayer({
-          id: clusterLayerId(cat),
-          type: "circle",
-          source: srcId(cat),
-          filter: ["has", "point_count"],
-          paint: {
-            "circle-color": color,
-            "circle-opacity": 0.85,
-            "circle-radius": [
-              "step",
-              ["get", "point_count"],
-              14,
-              25,
-              18,
-              100,
-              24,
-            ],
-            "circle-stroke-width": 1.5,
-            "circle-stroke-color": "rgba(0,0,0,0.4)",
-          },
-        });
+      // Cluster circles.
+      map.addLayer({
+        id: clusterLayerId(cat),
+        type: "circle",
+        source: srcId(cat),
+        filter: ["has", "point_count"],
+        paint: {
+          "circle-color": color,
+          "circle-opacity": 0.85,
+          "circle-radius": ["step", ["get", "point_count"], 14, 25, 18, 100, 24],
+          "circle-stroke-width": 1.5,
+          "circle-stroke-color": "rgba(255,255,255,0.85)",
+        },
+      });
 
-        // Cluster counts.
-        map.addLayer({
-          id: countLayerId(cat),
-          type: "symbol",
-          source: srcId(cat),
-          filter: ["has", "point_count"],
-          layout: {
-            "text-field": ["get", "point_count_abbreviated"],
-            "text-font": LABEL_FONT,
-            "text-size": 12,
-            "text-allow-overlap": true,
-          },
-          paint: {
-            "text-color": "#ffffff",
-          },
-        });
-      }
+      // Cluster counts.
+      map.addLayer({
+        id: countLayerId(cat),
+        type: "symbol",
+        source: srcId(cat),
+        filter: ["has", "point_count"],
+        layout: {
+          "text-field": ["get", "point_count_abbreviated"],
+          "text-font": LABEL_FONT,
+          "text-size": 12,
+          "text-allow-overlap": true,
+        },
+        paint: {
+          "text-color": "#ffffff",
+          "text-halo-color": "rgba(0,0,0,0.5)",
+          "text-halo-width": 1,
+        },
+      });
 
-      // Unclustered points (for apartments: every building, at all zooms).
-      // Apartments use bookmark-aware color/size so starred ones stand out.
+      // Unclustered points. Apartments use bookmark-aware color/size.
       const isApt = cat === "apartments";
       const bmIds = [...bookmarks.value];
       map.addLayer({
@@ -348,29 +427,38 @@ export function MapView() {
           "circle-color": isApt ? bookmarkColorExpr(bmIds) : color,
           "circle-radius": isApt ? bookmarkRadiusExpr(bmIds) : 6,
           "circle-stroke-width": 1.5,
-          // White halo keeps dots legible over the terrain basemap.
-          "circle-stroke-color": "rgba(255,255,255,0.9)",
+          // White halo keeps dots legible over satellite imagery.
+          "circle-stroke-color": "rgba(255,255,255,0.95)",
           "circle-stroke-opacity": 1,
         },
       });
 
-      // Interactions: cluster click only when this category clusters.
       map.on("mouseenter", pointLayerId(cat), onEnter);
       map.on("mouseleave", pointLayerId(cat), onLeave);
       map.on("click", pointLayerId(cat), onPointClick);
-      if (clustered) {
-        map.on("mouseenter", clusterLayerId(cat), onEnter);
-        map.on("mouseleave", clusterLayerId(cat), onLeave);
-        map.on("click", clusterLayerId(cat), onClusterClick);
-      }
+      map.on("mouseenter", clusterLayerId(cat), onEnter);
+      map.on("mouseleave", clusterLayerId(cat), onLeave);
+      map.on("click", clusterLayerId(cat), onClusterClick);
 
       installedRef.current.add(cat);
       applyFilterFor(cat);
     }
 
-    // ---- Apply the active-subcategory filter to a category's point layer. ----
+    // ---- Apply visibility/filters for a category's layers. ----
     function applyFilterFor(cat: CategoryId): void {
       if (!installedRef.current.has(cat)) return;
+      const layerIds = [pointLayerId(cat), clusterLayerId(cat), countLayerId(cat)];
+
+      // Apartments: visibility is driven entirely by the source data (selected
+      // towns). Show all of its points/clusters, no subcategory filtering.
+      if (cat === "apartments") {
+        map.setFilter(pointLayerId(cat), ["!", ["has", "point_count"]]);
+        for (const id of layerIds) {
+          if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", "visible");
+        }
+        return;
+      }
+
       const subs = activeSubsFor(cat);
       const visible = subs.length > 0 ? "visible" : "none";
 
@@ -381,12 +469,7 @@ export function MapView() {
         ["in", ["get", "subcategory"], ["literal", subs]],
       ]);
 
-      // Only toggle layers that actually exist (apartments have no clusters).
-      for (const id of [
-        pointLayerId(cat),
-        clusterLayerId(cat),
-        countLayerId(cat),
-      ]) {
+      for (const id of layerIds) {
         if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", visible);
       }
     }
@@ -440,7 +523,8 @@ export function MapView() {
         .addTo(map);
 
       // Wire the in-popup bookmark toggle (apartments only).
-      const btn = popupRef.current.getElement()?.querySelector(".mv-bm");
+      const el = popupRef.current.getElement();
+      const btn = el?.querySelector(".mv-bm");
       if (btn) {
         btn.addEventListener("click", () => {
           const id = btn.getAttribute("data-id");
@@ -449,6 +533,34 @@ export function MapView() {
           const on = isBookmarked(id);
           btn.textContent = on ? "★ Bookmarked" : "☆ Bookmark";
           btn.classList.toggle("on", on);
+        });
+      }
+
+      // Wire the "nearby within 10 mi" toggle.
+      const nb = el?.querySelector(".mv-nearby");
+      if (nb) {
+        nb.addEventListener("click", () => {
+          const id = nb.getAttribute("data-id");
+          const nm = nb.getAttribute("data-name") || "Apartment";
+          const lng = Number(nb.getAttribute("data-lng"));
+          const lat = Number(nb.getAttribute("data-lat"));
+          if (!id || !Number.isFinite(lng) || !Number.isFinite(lat)) return;
+          if (nearbyFocus.value?.id === id) {
+            clearNearby();
+            nb.textContent = "🍽 Food & fun within 10 mi";
+            nb.classList.remove("on");
+          } else {
+            showNearby({ id, name: nm, lng, lat, radiusMi: 10 });
+            map.fitBounds(
+              [
+                [lng - 0.22, lat - 0.16],
+                [lng + 0.22, lat + 0.16],
+              ],
+              { padding: 30 },
+            );
+            nb.textContent = "✕ Hide nearby";
+            nb.classList.add("on");
+          }
         });
       }
     }
@@ -513,14 +625,15 @@ export function MapView() {
             id: "fort-meade-fill",
             type: "fill",
             source: "src-fort-meade",
-            paint: { "fill-color": "#0c8599", "fill-opacity": 0.08 },
+            paint: { "fill-color": "#ffd43b", "fill-opacity": 0.06 },
           });
           map.addLayer({
             id: "fort-meade-outline",
             type: "line",
             source: "src-fort-meade",
             paint: {
-              "line-color": "#0b7285",
+              // Bright yellow dashed line stands out on satellite imagery.
+              "line-color": "#ffd43b",
               "line-width": 2.5,
               "line-dasharray": [3, 2],
             },
@@ -538,9 +651,9 @@ export function MapView() {
               "symbol-placement": "point",
             },
             paint: {
-              "text-color": "#0b525b",
-              "text-halo-color": "#ffffff",
-              "text-halo-width": 2,
+              "text-color": "#ffe066",
+              "text-halo-color": "rgba(0,0,0,0.85)",
+              "text-halo-width": 1.8,
             },
           });
         })
@@ -570,9 +683,9 @@ export function MapView() {
           source: "src-towns",
           paint: {
             "circle-radius": 3,
-            "circle-color": "#3a3226",
-            "circle-stroke-color": "#ffffff",
-            "circle-stroke-width": 1.5,
+            "circle-color": "#ffd43b",
+            "circle-stroke-color": "rgba(0,0,0,0.7)",
+            "circle-stroke-width": 1.2,
           },
         });
         map.addLayer({
@@ -588,26 +701,68 @@ export function MapView() {
             "text-padding": 6,
           },
           paint: {
-            "text-color": "#241f18",
-            "text-halo-color": "#ffffff",
-            "text-halo-width": 2,
-            "text-halo-blur": 0.4,
+            // White text + dark halo reads clearly over satellite imagery.
+            "text-color": "#ffffff",
+            "text-halo-color": "rgba(0,0,0,0.85)",
+            "text-halo-width": 1.6,
+            "text-halo-blur": 0.3,
           },
         });
       });
       disposers.push(townsEffect);
 
-      // Reactively install + filter category layers as data and filters change.
+      // Reactively install category layers as their data arrives.
       const dataEffect = effect(() => {
         const data = categoryData.value;
         for (const cat of CATEGORY_IDS) {
-          const fc = data[cat];
-          if (fc && !installedRef.current.has(cat)) {
-            installCategory(cat, fc);
+          if (data[cat] && !installedRef.current.has(cat)) {
+            installCategory(cat);
           }
         }
       });
       disposers.push(dataEffect);
+
+      // Update the apartments source to the selected towns' subset (empty when
+      // nothing is selected). Also re-runs when the apartment data first loads.
+      const areaEffect = effect(() => {
+        void selectedTowns.value;
+        void categoryData.value.apartments;
+        const src = map.getSource(srcId("apartments")) as GeoJSONSource | undefined;
+        if (src) src.setData(selectedApartmentFC());
+      });
+      disposers.push(areaEffect);
+
+      // Narrow POI sources to the nearby radius (or restore full) + draw ring.
+      const nearbyEffect = effect(() => {
+        const focus = nearbyFocus.value;
+        void categoryData.value;
+        for (const cat of ["food", "shopping", "entertainment"] as CategoryId[]) {
+          const src = map.getSource(srcId(cat)) as GeoJSONSource | undefined;
+          if (src) src.setData(poiSourceFC(cat));
+        }
+        // Radius ring.
+        const ringSrc = map.getSource("src-nearby-ring") as GeoJSONSource | undefined;
+        const ringData = focus
+          ? circlePolygon(focus.lng, focus.lat, focus.radiusMi)
+          : EMPTY_FC;
+        if (ringSrc) {
+          ringSrc.setData(ringData as GeoJSON.GeoJSON);
+        } else if (focus) {
+          map.addSource("src-nearby-ring", { type: "geojson", data: ringData });
+          map.addLayer({
+            id: "nearby-ring",
+            type: "line",
+            source: "src-nearby-ring",
+            paint: {
+              "line-color": "#ffffff",
+              "line-width": 2,
+              "line-dasharray": [2, 2],
+              "line-opacity": 0.9,
+            },
+          });
+        }
+      });
+      disposers.push(nearbyEffect);
 
       // Lazy-load categories that become enabled but aren't loaded yet.
       const loadEffect = effect(() => {

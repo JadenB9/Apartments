@@ -1,8 +1,8 @@
 import { useEffect } from "preact/hooks";
 import { MapView } from "./map/MapView";
 import { SearchBox } from "./components/SearchBox";
+import { AreaPanel } from "./components/AreaPanel";
 import { Sidebar } from "./components/Sidebar";
-import { TownsPanel } from "./components/TownsPanel";
 import { ApartmentTiles } from "./components/ApartmentTiles";
 
 export function App() {
@@ -21,8 +21,8 @@ export function App() {
         </header>
         <SearchBox />
         <div class="panel-scroll">
+          <AreaPanel />
           <Sidebar />
-          <TownsPanel />
           <ApartmentTiles />
         </div>
       </aside>

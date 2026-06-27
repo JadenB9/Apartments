@@ -10,14 +10,14 @@ import {
   toggleSub,
 } from "../store";
 
-// Category tree. Each category is a collapsible section with a master checkbox,
-// a count badge, a color swatch, and per-subcategory rows. Toggling a
-// non-apartments category/sub ON kicks off lazy data loading for the map.
+// Category tree for the amenity layers (food / shopping / entertainment).
+// Apartments are handled separately by the area picker, so they're excluded
+// here. Each category is a collapsible section with a master checkbox, a count
+// badge, a color swatch, and per-subcategory rows. Toggling ON lazy-loads data.
+const AMENITY_CATEGORIES = CATEGORIES.filter((c) => c.id !== "apartments");
+
 export function Sidebar() {
-  // Default: only "apartments" expanded.
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({
-    apartments: true,
-  });
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
   // Read these signals so the component re-renders on filter/meta changes.
   const counts = categoriesMeta.value?.counts ?? {};
@@ -25,7 +25,8 @@ export function Sidebar() {
 
   return (
     <div class="sidebar-tree">
-      {CATEGORIES.map((cat) => {
+      <div class="sidebar-heading">Amenities near apartments</div>
+      {AMENITY_CATEGORIES.map((cat) => {
         const isOpen = !!expanded[cat.id];
         const subKeys = cat.subcategories.map((s) => `${cat.id}:${s.id}`);
         const activeCount = subKeys.filter((k) => filters.has(k)).length;
@@ -119,7 +120,13 @@ const styles = `
 .sidebar-tree {
   flex: 1 1 auto;
   overflow-y: auto;
-  padding: 6px 0;
+  padding: 0 0 6px;
+}
+.sidebar-heading {
+  padding: 10px 12px 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
 }
 .cat { border-bottom: 1px solid var(--border); }
 .cat-header {
