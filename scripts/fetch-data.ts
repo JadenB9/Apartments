@@ -554,6 +554,121 @@ function normalize(
 }
 
 // ---------------------------------------------------------------------------
+// Merge apartment buildings into complexes
+// ---------------------------------------------------------------------------
+
+/**
+ * OSM tags each building of a complex separately, so a single apartment complex
+ * becomes a dozen dots. Union-find buildings within `thresholdM` of each other
+ * (transitively) into one representative point per complex.
+ */
+function mergeApartmentComplexes(apts: Apartment[], thresholdM = 80): Apartment[] {
+  const n = apts.length;
+  const parent = Array.from({ length: n }, (_, i) => i);
+  const find = (x: number): number => {
+    while (parent[x] !== x) {
+      parent[x] = parent[parent[x]];
+      x = parent[x];
+    }
+    return x;
+  };
+  const union = (a: number, b: number): void => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent[ra] = rb;
+  };
+
+  // Spatial grid (~thresholdM cells) so we only compare nearby buildings.
+  const cell = thresholdM / 111_000; // degrees latitude per metre, approx
+  const cx = (lng: number) => Math.floor(lng / cell);
+  const cy = (lat: number) => Math.floor(lat / cell);
+  const grid = new Map<string, number[]>();
+  apts.forEach((a, i) => {
+    const k = `${cx(a.lng)},${cy(a.lat)}`;
+    const bucket = grid.get(k);
+    if (bucket) bucket.push(i);
+    else grid.set(k, [i]);
+  });
+
+  apts.forEach((a, i) => {
+    const gx = cx(a.lng);
+    const gy = cy(a.lat);
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const arr = grid.get(`${gx + dx},${gy + dy}`);
+        if (!arr) continue;
+        for (const j of arr) {
+          if (j <= i) continue;
+          const b = apts[j];
+          if (haversineKm(a.lat, a.lng, b.lat, b.lng) * 1000 <= thresholdM) {
+            union(i, j);
+          }
+        }
+      }
+    }
+  });
+
+  const groups = new Map<number, number[]>();
+  for (let i = 0; i < n; i++) {
+    const r = find(i);
+    const g = groups.get(r);
+    if (g) g.push(i);
+    else groups.set(r, [i]);
+  }
+
+  const isGeneric = (name: string) =>
+    !name || name === "Unnamed" || /^Apartment Building/.test(name);
+
+  const result: Apartment[] = [];
+  for (const idxs of groups.values()) {
+    const members = idxs.map((i) => apts[i]);
+    const rep = members.find((m) => !isGeneric(m.name)) ?? members[0];
+    const lat = members.reduce((s, m) => s + m.lat, 0) / members.length;
+    const lng = members.reduce((s, m) => s + m.lng, 0) / members.length;
+
+    // Most common town among members.
+    const townTally = new Map<string, number>();
+    for (const m of members) {
+      if (m.town) townTally.set(m.town, (townTally.get(m.town) ?? 0) + 1);
+    }
+    let town = rep.town;
+    let best = 0;
+    for (const [t, c] of townTally) {
+      if (c > best) {
+        best = c;
+        town = t;
+      }
+    }
+
+    // Keep the richest tag bag (most keys) among members.
+    let tags = rep.tags;
+    let mostKeys = tags ? Object.keys(tags).length : 0;
+    for (const m of members) {
+      const k = m.tags ? Object.keys(m.tags).length : 0;
+      if (k > mostKeys) {
+        mostKeys = k;
+        tags = m.tags;
+      }
+    }
+
+    const address = rep.address;
+    result.push({
+      id: rep.id,
+      name: rep.name,
+      category: "apartments",
+      subcategory: rep.subcategory,
+      lat: +lat.toFixed(6),
+      lng: +lng.toFixed(6),
+      ...(town ? { town } : {}),
+      ...(address ? { address } : {}),
+      ...(tags ? { tags } : {}),
+      links: buildApartmentLinks({ name: rep.name, lat, lng, town, address }),
+    });
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Counts payload
 // ---------------------------------------------------------------------------
 
@@ -643,6 +758,13 @@ async function main() {
       entertainment: entertainmentRaw,
     },
     towns,
+  );
+
+  // 2b. Merge per-building apartment dots into one point per complex.
+  const rawApartments = places.apartments.length;
+  places.apartments = mergeApartmentComplexes(places.apartments);
+  console.log(
+    `  merged apartments: ${rawApartments} buildings -> ${places.apartments.length} complexes`,
   );
 
   // 3. Write output.

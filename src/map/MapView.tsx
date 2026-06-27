@@ -390,7 +390,8 @@ export function MapView() {
         paint: {
           "circle-color": color,
           "circle-opacity": 0.85,
-          "circle-radius": ["step", ["get", "point_count"], 14, 25, 18, 100, 24],
+          // Smaller bubbles when zoomed out.
+          "circle-radius": ["step", ["get", "point_count"], 10, 25, 13, 100, 16],
           "circle-stroke-width": 1.5,
           "circle-stroke-color": "rgba(255,255,255,0.85)",
         },
@@ -405,7 +406,7 @@ export function MapView() {
         layout: {
           "text-field": ["get", "point_count_abbreviated"],
           "text-font": LABEL_FONT,
-          "text-size": 12,
+          "text-size": 10,
           "text-allow-overlap": true,
         },
         paint: {
@@ -498,13 +499,29 @@ export function MapView() {
         .catch(() => {});
     }
 
-    // ---- Point click: open popup + set selection. ----
+    // Look up a feature's FULL properties (with nested links/tags intact) by id.
+    // MapLibre flattens nested props on rendered features, so a raw map-click
+    // feature loses its links — we re-read from the source data instead.
+    function fullPropsById(id: string): PlaceFeature["properties"] | null {
+      for (const cat of CATEGORY_IDS) {
+        const fc = categoryData.value[cat];
+        if (!fc) continue;
+        const f = fc.features.find((feat) => feat.properties.id === id);
+        if (f) return f.properties;
+      }
+      return null;
+    }
+
+    // ---- Point click: open the same detailed popup as the sidebar. ----
     function onPointClick(e: MapLayerMouseEvent): void {
       const feature = e.features?.[0];
       if (!feature) return;
-      const props = feature.properties as unknown as PlaceFeature["properties"];
       const coords = (feature.geometry as GeoJSON.Point).coordinates as [number, number];
-      selectedPlaceId.value = props.id ?? null;
+      const id = (feature.properties as { id?: string }).id;
+      const props =
+        (id && fullPropsById(id)) ||
+        (feature.properties as unknown as PlaceFeature["properties"]);
+      selectedPlaceId.value = id ?? null;
       openPopupAt(coords, props);
     }
 
@@ -588,7 +605,7 @@ export function MapView() {
             if (f) {
               const coords = f.geometry.coordinates as [number, number];
               selectedPlaceId.value = placeId;
-              map.flyTo({ center: coords, zoom: Math.max(map.getZoom(), 15) });
+              map.flyTo({ center: coords, zoom: Math.max(map.getZoom(), 16) });
               openPopupAt(coords, f.properties);
               return;
             }
