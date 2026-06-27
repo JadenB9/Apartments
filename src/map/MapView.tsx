@@ -4,8 +4,8 @@
 // source/layer set per category, a clickable apartments layer, and wires itself
 // into the shared signal store (filters, selection, viewport, mapActions).
 //
-// NOTE: This uses CARTO's public raster tiles, which are keyless and match the
-// dark UI. The documented faster upgrade is to self-host a pmtiles vector
+// NOTE: This uses CARTO's public full-color Voyager raster tiles, which are
+// keyless. The documented faster upgrade is to self-host a pmtiles vector
 // extract of the corridor (pmtiles@3 is already a dependency) and swap the
 // `carto` raster source for a `pmtiles://` vector source + vector style — that
 // removes the per-tile network round-trips and renders crisper at all zooms.
@@ -27,6 +27,7 @@ import {
   enabledCategories,
   mapActions,
   selectedPlaceId,
+  towns,
   viewportBounds,
 } from "../store";
 import { loadCore, loadCategory } from "../data/loader";
@@ -40,17 +41,20 @@ import type {
 
 const CATEGORY_IDS: CategoryId[] = CATEGORIES.map((c) => c.id);
 
-// Keyless dark raster basemap (CARTO dark_all). See file header for the
+// Keyless full-color raster basemap (CARTO Voyager). See file header for the
 // pmtiles upgrade path.
 const BASEMAP_STYLE: StyleSpecification = {
   version: 8,
+  // Keyless public glyph endpoint so our symbol layers (town labels, the Fort
+  // Meade label, cluster counts) can render text over the raster basemap.
+  glyphs: "https://fonts.openmaptiles.org/{fontstack}/{range}.pbf",
   sources: {
     carto: {
       type: "raster",
       tiles: [
-        "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
-        "https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
-        "https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
+        "https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
+        "https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
+        "https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
       ],
       tileSize: 256,
       attribution: "© OpenStreetMap, © CARTO",
@@ -59,43 +63,77 @@ const BASEMAP_STYLE: StyleSpecification = {
   layers: [{ id: "carto", type: "raster", source: "carto" }],
 };
 
+// Single font (no comma-joined composite) the openmaptiles glyph server serves
+// as a clean SDF PBF.
+const LABEL_FONT = ["Open Sans Bold"];
+
+// Categories that draw clustered circles. Apartments are intentionally NOT
+// clustered — every building shows as its own dot at all zooms.
+const CLUSTERED: Record<CategoryId, boolean> = {
+  apartments: false,
+  food: true,
+  shopping: true,
+  entertainment: true,
+};
+
+// Approximate boundary of Fort George G. Meade, drawn as a clear outline so the
+// installation footprint is obvious on the map.
+const FORT_MEADE_OUTLINE: GeoJSON.Feature<GeoJSON.Polygon> = {
+  type: "Feature",
+  properties: { name: "Fort Meade" },
+  geometry: {
+    type: "Polygon",
+    coordinates: [[
+      [-76.768, 39.121],
+      [-76.731, 39.122],
+      [-76.706, 39.111],
+      [-76.700, 39.090],
+      [-76.717, 39.073],
+      [-76.748, 39.073],
+      [-76.769, 39.092],
+      [-76.772, 39.108],
+      [-76.768, 39.121],
+    ]],
+  },
+};
+
 const POPUP_STYLE_ID = "mapview-popup-style";
 
-// Inject a small style block so popups are legible on the dark theme.
+// Inject a small style block so popups match the warm light theme.
 function ensurePopupStyles(): void {
   if (document.getElementById(POPUP_STYLE_ID)) return;
   const el = document.createElement("style");
   el.id = POPUP_STYLE_ID;
   el.textContent = `
 .maplibregl-popup.mv-popup .maplibregl-popup-content {
-  background: #1b1d21;
-  color: #e9ecef;
-  border: 1px solid #343a40;
-  border-radius: 8px;
-  padding: 10px 12px;
+  background: #fffdf8;
+  color: #2a2620;
+  border: 1px solid #ddd3c0;
+  border-radius: 10px;
+  padding: 11px 13px;
   font: 13px/1.4 system-ui, sans-serif;
   max-width: 260px;
-  box-shadow: 0 6px 24px rgba(0,0,0,0.5);
+  box-shadow: 0 8px 24px rgba(60,50,30,0.18);
 }
-.maplibregl-popup.mv-popup .maplibregl-popup-tip { border-top-color: #1b1d21; border-bottom-color: #1b1d21; }
-.maplibregl-popup.mv-popup .maplibregl-popup-close-button { color: #adb5bd; font-size: 16px; }
-.mv-popup h3 { margin: 0 0 4px; font-size: 14px; color: #fff; }
-.mv-popup .mv-sub { color: #adb5bd; margin: 0 0 6px; font-size: 12px; }
-.mv-popup .mv-tags { margin: 0 0 8px; color: #ced4da; font-size: 12px; }
+.maplibregl-popup.mv-popup .maplibregl-popup-tip { border-top-color: #fffdf8; border-bottom-color: #fffdf8; }
+.maplibregl-popup.mv-popup .maplibregl-popup-close-button { color: #857b68; font-size: 16px; }
+.mv-popup h3 { margin: 0 0 4px; font-size: 14px; color: #1f1b16; }
+.mv-popup .mv-sub { color: #857b68; margin: 0 0 6px; font-size: 12px; }
+.mv-popup .mv-tags { margin: 0 0 8px; color: #5f574a; font-size: 12px; }
 .mv-popup .mv-tags div { margin: 1px 0; }
 .mv-popup .mv-links { display: flex; gap: 6px; flex-wrap: wrap; }
 .mv-popup .mv-links a {
   display: inline-block;
   padding: 4px 8px;
-  background: #2b2f36;
-  border: 1px solid #495057;
+  background: #f0eadd;
+  border: 1px solid #ddd3c0;
   border-radius: 5px;
-  color: #e9ecef;
+  color: #1f6f6b;
   text-decoration: none;
   font-size: 11px;
   white-space: nowrap;
 }
-.mv-popup .mv-links a:hover { background: #3a3f47; }
+.mv-popup .mv-links a:hover { background: #e6dcc8; }
 `;
   document.head.appendChild(el);
 }
@@ -196,10 +234,11 @@ export function MapView() {
     // reads whatever data has arrived by then.
     void loadCore();
 
-    // maxBounds: pad slightly around MAP_BOUNDS so the corridor stays framed.
+    // maxBounds: generous padding around MAP_BOUNDS so there's room to pan and
+    // look around the edges (toward Baltimore / DC) without loading more data.
     const [w, s, e, n] = MAP_BOUNDS;
-    const padX = (e - w) * 0.15;
-    const padY = (n - s) * 0.15;
+    const padX = (e - w) * 0.45;
+    const padY = (n - s) * 0.45;
     const maxBounds: maplibregl.LngLatBoundsLike = [
       [w - padX, s - padY],
       [e + padX, n + padY],
@@ -210,6 +249,7 @@ export function MapView() {
       style: BASEMAP_STYLE,
       center: MAP_CENTER,
       zoom: INITIAL_ZOOM,
+      minZoom: 9,
       maxBounds,
       attributionControl: { compact: true },
     });
@@ -223,56 +263,59 @@ export function MapView() {
       if (installedRef.current.has(cat)) return;
       if (map.getSource(srcId(cat))) return;
       const color = CATEGORY_BY_ID[cat].color;
+      const clustered = CLUSTERED[cat];
 
       map.addSource(srcId(cat), {
         type: "geojson",
         data: data as unknown as GeoJSON.FeatureCollection,
-        cluster: true,
-        clusterRadius: 50,
-        clusterMaxZoom: 14,
+        ...(clustered
+          ? { cluster: true, clusterRadius: 50, clusterMaxZoom: 14 }
+          : {}),
       });
 
-      // Cluster circles.
-      map.addLayer({
-        id: clusterLayerId(cat),
-        type: "circle",
-        source: srcId(cat),
-        filter: ["has", "point_count"],
-        paint: {
-          "circle-color": color,
-          "circle-opacity": 0.85,
-          "circle-radius": [
-            "step",
-            ["get", "point_count"],
-            14,
-            25,
-            18,
-            100,
-            24,
-          ],
-          "circle-stroke-width": 1.5,
-          "circle-stroke-color": "rgba(0,0,0,0.4)",
-        },
-      });
+      if (clustered) {
+        // Cluster circles.
+        map.addLayer({
+          id: clusterLayerId(cat),
+          type: "circle",
+          source: srcId(cat),
+          filter: ["has", "point_count"],
+          paint: {
+            "circle-color": color,
+            "circle-opacity": 0.85,
+            "circle-radius": [
+              "step",
+              ["get", "point_count"],
+              14,
+              25,
+              18,
+              100,
+              24,
+            ],
+            "circle-stroke-width": 1.5,
+            "circle-stroke-color": "rgba(0,0,0,0.4)",
+          },
+        });
 
-      // Cluster counts.
-      map.addLayer({
-        id: countLayerId(cat),
-        type: "symbol",
-        source: srcId(cat),
-        filter: ["has", "point_count"],
-        layout: {
-          "text-field": ["get", "point_count_abbreviated"],
-          "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
-          "text-size": 12,
-          "text-allow-overlap": true,
-        },
-        paint: {
-          "text-color": "#ffffff",
-        },
-      });
+        // Cluster counts.
+        map.addLayer({
+          id: countLayerId(cat),
+          type: "symbol",
+          source: srcId(cat),
+          filter: ["has", "point_count"],
+          layout: {
+            "text-field": ["get", "point_count_abbreviated"],
+            "text-font": LABEL_FONT,
+            "text-size": 12,
+            "text-allow-overlap": true,
+          },
+          paint: {
+            "text-color": "#ffffff",
+          },
+        });
+      }
 
-      // Unclustered points.
+      // Unclustered points (for apartments: every building, at all zooms).
       map.addLayer({
         id: pointLayerId(cat),
         type: "circle",
@@ -282,21 +325,21 @@ export function MapView() {
           "circle-color": color,
           "circle-radius": 6,
           "circle-stroke-width": 1.5,
-          "circle-stroke-color": "#ffffff",
+          // Dark stroke reads clearly against the light full-color basemap.
+          "circle-stroke-color": "rgba(255,255,255,0.9)",
+          "circle-stroke-opacity": 1,
         },
       });
 
-      // Interactions on the interactive layers for this category.
-      const interactive = [
-        clusterLayerId(cat),
-        pointLayerId(cat),
-      ];
-      for (const id of interactive) {
-        map.on("mouseenter", id, onEnter);
-        map.on("mouseleave", id, onLeave);
-      }
-      map.on("click", clusterLayerId(cat), onClusterClick);
+      // Interactions: cluster click only when this category clusters.
+      map.on("mouseenter", pointLayerId(cat), onEnter);
+      map.on("mouseleave", pointLayerId(cat), onLeave);
       map.on("click", pointLayerId(cat), onPointClick);
+      if (clustered) {
+        map.on("mouseenter", clusterLayerId(cat), onEnter);
+        map.on("mouseleave", clusterLayerId(cat), onLeave);
+        map.on("click", clusterLayerId(cat), onClusterClick);
+      }
 
       installedRef.current.add(cat);
       applyFilterFor(cat);
@@ -315,12 +358,13 @@ export function MapView() {
         ["in", ["get", "subcategory"], ["literal", subs]],
       ]);
 
+      // Only toggle layers that actually exist (apartments have no clusters).
       for (const id of [
         pointLayerId(cat),
         clusterLayerId(cat),
         countLayerId(cat),
       ]) {
-        map.setLayoutProperty(id, "visibility", visible);
+        if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", visible);
       }
     }
 
@@ -421,6 +465,93 @@ export function MapView() {
     map.on("load", () => {
       registerActions();
       onMoveEnd(); // seed initial bounds
+
+      // ---- Fort Meade installation outline (static). ----
+      map.addSource("src-fort-meade", { type: "geojson", data: FORT_MEADE_OUTLINE });
+      map.addLayer({
+        id: "fort-meade-fill",
+        type: "fill",
+        source: "src-fort-meade",
+        paint: { "fill-color": "#0c8599", "fill-opacity": 0.1 },
+      });
+      map.addLayer({
+        id: "fort-meade-outline",
+        type: "line",
+        source: "src-fort-meade",
+        paint: {
+          "line-color": "#0b7285",
+          "line-width": 2.5,
+          "line-dasharray": [3, 2],
+        },
+      });
+      map.addLayer({
+        id: "fort-meade-label",
+        type: "symbol",
+        source: "src-fort-meade",
+        layout: {
+          "text-field": "Fort Meade",
+          "text-font": LABEL_FONT,
+          "text-size": 13,
+          "text-letter-spacing": 0.05,
+          "text-transform": "uppercase",
+        },
+        paint: {
+          "text-color": "#0b525b",
+          "text-halo-color": "#ffffff",
+          "text-halo-width": 2,
+        },
+      });
+
+      // ---- Clear, bold corridor town labels (drawn on top). ----
+      const townsEffect = effect(() => {
+        const list = towns.value;
+        if (!list.length) return;
+        const townsFC: GeoJSON.FeatureCollection = {
+          type: "FeatureCollection",
+          features: list.map((t) => ({
+            type: "Feature",
+            geometry: { type: "Point", coordinates: [t.lng, t.lat] },
+            properties: { name: t.name, placeType: t.placeType },
+          })),
+        };
+        const src = map.getSource("src-towns") as GeoJSONSource | undefined;
+        if (src) {
+          src.setData(townsFC);
+          return;
+        }
+        map.addSource("src-towns", { type: "geojson", data: townsFC });
+        map.addLayer({
+          id: "town-dots",
+          type: "circle",
+          source: "src-towns",
+          paint: {
+            "circle-radius": 3,
+            "circle-color": "#3a3226",
+            "circle-stroke-color": "#ffffff",
+            "circle-stroke-width": 1.5,
+          },
+        });
+        map.addLayer({
+          id: "town-labels",
+          type: "symbol",
+          source: "src-towns",
+          layout: {
+            "text-field": ["get", "name"],
+            "text-font": LABEL_FONT,
+            "text-size": ["interpolate", ["linear"], ["zoom"], 9, 11, 13, 16],
+            "text-anchor": "top",
+            "text-offset": [0, 0.5],
+            "text-padding": 6,
+          },
+          paint: {
+            "text-color": "#241f18",
+            "text-halo-color": "#ffffff",
+            "text-halo-width": 2,
+            "text-halo-blur": 0.4,
+          },
+        });
+      });
+      disposers.push(townsEffect);
 
       // Reactively install + filter category layers as data and filters change.
       const dataEffect = effect(() => {
