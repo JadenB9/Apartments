@@ -35,6 +35,39 @@ export const activeFilters = signal<Set<string>>(seedFilters());
 export const searchQuery = signal<string>("");
 export const selectedPlaceId = signal<string | null>(null);
 
+// ---- Bookmarks (persisted to localStorage) ----
+// Apartments the user has starred. Bookmarked apartments render in a distinct
+// dot color on the map and a highlighted tile in the list.
+const BOOKMARKS_KEY = "bw-corridor-bookmarks";
+
+function loadBookmarks(): Set<string> {
+  try {
+    const raw = localStorage.getItem(BOOKMARKS_KEY);
+    if (raw) return new Set(JSON.parse(raw) as string[]);
+  } catch {
+    /* ignore malformed / unavailable storage */
+  }
+  return new Set();
+}
+
+export const bookmarks = signal<Set<string>>(loadBookmarks());
+
+export function isBookmarked(id: string): boolean {
+  return bookmarks.value.has(id);
+}
+
+export function toggleBookmark(id: string): void {
+  const next = new Set(bookmarks.value);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  bookmarks.value = next;
+  try {
+    localStorage.setItem(BOOKMARKS_KEY, JSON.stringify([...next]));
+  } catch {
+    /* ignore storage write failures (private mode, quota) */
+  }
+}
+
 // Current map viewport bounds [w,s,e,n] — kept in sync by the map so the tile
 // panel can show only what's visible.
 export const viewportBounds = signal<[number, number, number, number] | null>(null);

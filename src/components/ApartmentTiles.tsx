@@ -1,5 +1,11 @@
 import type { Apartment } from "../data/types";
-import { mapActions, selectedPlaceId, visibleApartments } from "../store";
+import {
+  bookmarks,
+  mapActions,
+  selectedPlaceId,
+  toggleBookmark,
+  visibleApartments,
+} from "../store";
 
 const MAX_TILES = 300;
 
@@ -42,10 +48,14 @@ function Tile({ apt, selected }: { apt: Apartment; selected: boolean }) {
   };
 
   const links = apt.links;
+  const marked = bookmarks.value.has(apt.id);
+
+  const cls =
+    "apt-tile" + (selected ? " selected" : "") + (marked ? " bookmarked" : "");
 
   return (
     <div
-      class={selected ? "apt-tile selected" : "apt-tile"}
+      class={cls}
       role="button"
       tabIndex={0}
       onClick={onOpen}
@@ -56,7 +66,22 @@ function Tile({ apt, selected }: { apt: Apartment; selected: boolean }) {
         }
       }}
     >
-      <div class="apt-name" title={apt.name}>{apt.name || "Unnamed"}</div>
+      <div class="apt-row">
+        <div class="apt-name" title={apt.name}>{apt.name || "Unnamed"}</div>
+        <button
+          class={marked ? "apt-star on" : "apt-star"}
+          type="button"
+          title={marked ? "Remove bookmark" : "Bookmark this apartment"}
+          aria-label={marked ? "Remove bookmark" : "Bookmark this apartment"}
+          aria-pressed={marked}
+          onClick={(e) => {
+            e.stopPropagation();
+            toggleBookmark(apt.id);
+          }}
+        >
+          {marked ? "★" : "☆"}
+        </button>
+      </div>
       {apt.town ? <div class="apt-town">{apt.town}</div> : null}
       <div class="apt-links">
         <LinkBtn href={links?.googleMaps} label="Maps" />
@@ -119,7 +144,17 @@ const styles = `
   border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent);
 }
+.apt-tile.bookmarked {
+  border-left-color: var(--bookmark);
+  background: var(--bookmark-soft);
+}
+.apt-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
 .apt-name {
+  flex: 1 1 auto;
   font-size: 12.5px;
   font-weight: 600;
   color: var(--text);
@@ -127,6 +162,17 @@ const styles = `
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.apt-star {
+  flex: 0 0 auto;
+  padding: 0 2px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+}
+.apt-star:hover { color: var(--bookmark); }
+.apt-star.on { color: var(--bookmark); }
 .apt-town {
   font-size: 11px;
   color: var(--muted);

@@ -193,25 +193,43 @@ function classifyEntertainment(tags: Record<string, string>): Classified | null 
   return null;
 }
 
+// Multi-unit signals used to tell an apartment complex apart from the many
+// single-family buildings OSM also tags `building=residential`.
+function looksMultiUnit(tags: Record<string, string>): boolean {
+  const levels = parseInt(tags["building:levels"] ?? tags.levels ?? "0", 10);
+  return (
+    !!tags.name ||
+    !!tags.units ||
+    (Number.isFinite(levels) && levels >= 3) ||
+    tags.residential === "apartments"
+  );
+}
+
 function classifyApartment(tags: Record<string, string>): Classified | null {
   const building = tags.building;
-  if (building === "apartments") {
-    return { category: "apartments", subcategory: "apartments" };
+  const name = tags.name ?? "";
+
+  if (building === "apartments" || tags["building:use"] === "apartments") {
+    return {
+      category: "apartments",
+      subcategory: /condo/i.test(name) ? "condo" : "apartments",
+    };
   }
-  if (building === "residential" && tags.residential === "apartments") {
+  if (tags.residential === "apartments") {
     return { category: "apartments", subcategory: "apartments" };
-  }
-  if (tags["building:use"] === "apartments") {
-    return { category: "apartments", subcategory: "apartments" };
-  }
-  if (building === "residential") {
-    return { category: "apartments", subcategory: "residential" };
   }
   if (building === "dormitory" || tags.residential === "university") {
     return { category: "apartments", subcategory: "residential" };
   }
-  if (tags.building === "yes" && /apartment|condo|residence|towers?|lofts?/i.test(tags.name ?? "")) {
-    return { category: "apartments", subcategory: /condo/i.test(tags.name ?? "") ? "condo" : "apartments" };
+  // `building=residential` is ambiguous (often single-family houses). Only keep
+  // it when something signals a multi-unit complex — otherwise we'd flood the
+  // map with tens of thousands of ordinary houses.
+  if (building === "residential" && looksMultiUnit(tags)) {
+    return { category: "apartments", subcategory: "residential" };
+  }
+  // Any building whose name clearly reads like a complex.
+  if (building && /apartment|condo|residence|towers?|lofts?|the reserve|avalon/i.test(name)) {
+    return { category: "apartments", subcategory: /condo/i.test(name) ? "condo" : "apartments" };
   }
   return null;
 }

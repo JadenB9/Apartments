@@ -14,6 +14,7 @@ import { useEffect, useRef } from "preact/hooks";
 import { effect } from "@preact/signals";
 import maplibregl from "maplibre-gl";
 import type {
+  ExpressionSpecification,
   GeoJSONSource,
   MapGeoJSONFeature,
   MapLayerMouseEvent,
@@ -23,10 +24,13 @@ import "maplibre-gl/dist/maplibre-gl.css";
 
 import {
   activeFilters,
+  bookmarks,
   categoryData,
   enabledCategories,
+  isBookmarked,
   mapActions,
   selectedPlaceId,
+  toggleBookmark,
   towns,
   viewportBounds,
 } from "../store";
@@ -41,31 +45,50 @@ import type {
 
 const CATEGORY_IDS: CategoryId[] = CATEGORIES.map((c) => c.id);
 
-// Keyless full-color raster basemap (CARTO Voyager). See file header for the
-// pmtiles upgrade path.
+// Keyless nature/terrain raster basemap (OpenTopoMap) — greenery, forests,
+// water and relief instead of a road-dominated street map.
 const BASEMAP_STYLE: StyleSpecification = {
   version: 8,
   // Keyless public glyph endpoint so our symbol layers (town labels, the Fort
   // Meade label, cluster counts) can render text over the raster basemap.
   glyphs: "https://fonts.openmaptiles.org/{fontstack}/{range}.pbf",
   sources: {
-    carto: {
+    topo: {
       type: "raster",
       tiles: [
-        "https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
-        "https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
-        "https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
+        "https://a.tile.opentopomap.org/{z}/{x}/{y}.png",
+        "https://b.tile.opentopomap.org/{z}/{x}/{y}.png",
+        "https://c.tile.opentopomap.org/{z}/{x}/{y}.png",
       ],
       tileSize: 256,
-      attribution: "© OpenStreetMap, © CARTO",
+      maxzoom: 17,
+      attribution:
+        "© OpenTopoMap (CC-BY-SA), © OpenStreetMap contributors",
     },
   },
-  layers: [{ id: "carto", type: "raster", source: "carto" }],
+  layers: [{ id: "topo", type: "raster", source: "topo" }],
 };
 
 // Single font (no comma-joined composite) the openmaptiles glyph server serves
 // as a clean SDF PBF.
 const LABEL_FONT = ["Open Sans Bold"];
+
+// Distinct dot color for bookmarked apartments (vs the orange default).
+const BOOKMARK_COLOR = "#1971c2";
+
+// Data-driven paint expressions: bookmarked apartment ids render bigger and in
+// the bookmark color. Rebuilt whenever the bookmark set changes.
+function bookmarkColorExpr(ids: string[]): ExpressionSpecification {
+  return [
+    "case",
+    ["in", ["get", "id"], ["literal", ids]],
+    BOOKMARK_COLOR,
+    CATEGORY_BY_ID.apartments.color,
+  ];
+}
+function bookmarkRadiusExpr(ids: string[]): ExpressionSpecification {
+  return ["case", ["in", ["get", "id"], ["literal", ids]], 7.5, 6];
+}
 
 // Categories that draw clustered circles. Apartments are intentionally NOT
 // clustered — every building shows as its own dot at all zooms.
@@ -74,27 +97,6 @@ const CLUSTERED: Record<CategoryId, boolean> = {
   food: true,
   shopping: true,
   entertainment: true,
-};
-
-// Approximate boundary of Fort George G. Meade, drawn as a clear outline so the
-// installation footprint is obvious on the map.
-const FORT_MEADE_OUTLINE: GeoJSON.Feature<GeoJSON.Polygon> = {
-  type: "Feature",
-  properties: { name: "Fort Meade" },
-  geometry: {
-    type: "Polygon",
-    coordinates: [[
-      [-76.768, 39.121],
-      [-76.731, 39.122],
-      [-76.706, 39.111],
-      [-76.700, 39.090],
-      [-76.717, 39.073],
-      [-76.748, 39.073],
-      [-76.769, 39.092],
-      [-76.772, 39.108],
-      [-76.768, 39.121],
-    ]],
-  },
 };
 
 const POPUP_STYLE_ID = "mapview-popup-style";
@@ -134,6 +136,19 @@ function ensurePopupStyles(): void {
   white-space: nowrap;
 }
 .mv-popup .mv-links a:hover { background: #e6dcc8; }
+.mv-popup .mv-bm {
+  display: inline-block;
+  margin: 0 0 8px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #1971c2;
+  background: #e7f1fb;
+  border: 1px solid #a5c8ec;
+  border-radius: 6px;
+}
+.mv-popup .mv-bm:hover { background: #d7e7f8; }
+.mv-popup .mv-bm.on { color: #fff; background: #1971c2; border-color: #1971c2; }
 `;
   document.head.appendChild(el);
 }
@@ -191,10 +206,15 @@ function popupHTML(props: PlaceFeature["properties"]): string {
           <a href="${esc(links.zillow)}" target="_blank" rel="noopener">Zillow</a>
         </div>`
       : "";
+    const marked = isBookmarked(props.id);
+    const bmBtn = `<button type="button" class="mv-bm${marked ? " on" : ""}" data-id="${esc(props.id)}">${
+      marked ? "★ Bookmarked" : "☆ Bookmark"
+    }</button>`;
     return `<div class="mv-popup">
       <h3>${name}</h3>
       ${where ? `<p class="mv-sub">${where}</p>` : ""}
       ${tagRows.length ? `<div class="mv-tags">${tagRows.join("")}</div>` : ""}
+      ${bmBtn}
       ${linkBtns}
     </div>`;
   }
@@ -316,16 +336,19 @@ export function MapView() {
       }
 
       // Unclustered points (for apartments: every building, at all zooms).
+      // Apartments use bookmark-aware color/size so starred ones stand out.
+      const isApt = cat === "apartments";
+      const bmIds = [...bookmarks.value];
       map.addLayer({
         id: pointLayerId(cat),
         type: "circle",
         source: srcId(cat),
         filter: ["!", ["has", "point_count"]],
         paint: {
-          "circle-color": color,
-          "circle-radius": 6,
+          "circle-color": isApt ? bookmarkColorExpr(bmIds) : color,
+          "circle-radius": isApt ? bookmarkRadiusExpr(bmIds) : 6,
           "circle-stroke-width": 1.5,
-          // Dark stroke reads clearly against the light full-color basemap.
+          // White halo keeps dots legible over the terrain basemap.
           "circle-stroke-color": "rgba(255,255,255,0.9)",
           "circle-stroke-opacity": 1,
         },
@@ -415,6 +438,19 @@ export function MapView() {
         .setLngLat(coords)
         .setHTML(popupHTML(props))
         .addTo(map);
+
+      // Wire the in-popup bookmark toggle (apartments only).
+      const btn = popupRef.current.getElement()?.querySelector(".mv-bm");
+      if (btn) {
+        btn.addEventListener("click", () => {
+          const id = btn.getAttribute("data-id");
+          if (!id) return;
+          toggleBookmark(id);
+          const on = isBookmarked(id);
+          btn.textContent = on ? "★ Bookmarked" : "☆ Bookmark";
+          btn.classList.toggle("on", on);
+        });
+      }
     }
 
     // ---- Register map actions for the rest of the app. ----
@@ -466,41 +502,49 @@ export function MapView() {
       registerActions();
       onMoveEnd(); // seed initial bounds
 
-      // ---- Fort Meade installation outline (static). ----
-      map.addSource("src-fort-meade", { type: "geojson", data: FORT_MEADE_OUTLINE });
-      map.addLayer({
-        id: "fort-meade-fill",
-        type: "fill",
-        source: "src-fort-meade",
-        paint: { "fill-color": "#0c8599", "fill-opacity": 0.1 },
-      });
-      map.addLayer({
-        id: "fort-meade-outline",
-        type: "line",
-        source: "src-fort-meade",
-        paint: {
-          "line-color": "#0b7285",
-          "line-width": 2.5,
-          "line-dasharray": [3, 2],
-        },
-      });
-      map.addLayer({
-        id: "fort-meade-label",
-        type: "symbol",
-        source: "src-fort-meade",
-        layout: {
-          "text-field": "Fort Meade",
-          "text-font": LABEL_FONT,
-          "text-size": 13,
-          "text-letter-spacing": 0.05,
-          "text-transform": "uppercase",
-        },
-        paint: {
-          "text-color": "#0b525b",
-          "text-halo-color": "#ffffff",
-          "text-halo-width": 2,
-        },
-      });
+      // ---- Fort Meade installation outline (real OSM boundary, baked JSON). ----
+      const fmBase = import.meta.env.BASE_URL || "/";
+      fetch(`${fmBase}data/fort-meade.json`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((geo: GeoJSON.Feature | null) => {
+          if (!geo || map.getSource("src-fort-meade")) return;
+          map.addSource("src-fort-meade", { type: "geojson", data: geo });
+          map.addLayer({
+            id: "fort-meade-fill",
+            type: "fill",
+            source: "src-fort-meade",
+            paint: { "fill-color": "#0c8599", "fill-opacity": 0.08 },
+          });
+          map.addLayer({
+            id: "fort-meade-outline",
+            type: "line",
+            source: "src-fort-meade",
+            paint: {
+              "line-color": "#0b7285",
+              "line-width": 2.5,
+              "line-dasharray": [3, 2],
+            },
+          });
+          map.addLayer({
+            id: "fort-meade-label",
+            type: "symbol",
+            source: "src-fort-meade",
+            layout: {
+              "text-field": "Fort Meade",
+              "text-font": LABEL_FONT,
+              "text-size": 13,
+              "text-letter-spacing": 0.05,
+              "text-transform": "uppercase",
+              "symbol-placement": "point",
+            },
+            paint: {
+              "text-color": "#0b525b",
+              "text-halo-color": "#ffffff",
+              "text-halo-width": 2,
+            },
+          });
+        })
+        .catch(() => {});
 
       // ---- Clear, bold corridor town labels (drawn on top). ----
       const townsEffect = effect(() => {
@@ -576,6 +620,17 @@ export function MapView() {
         }
       });
       disposers.push(loadEffect);
+
+      // Recolor/resize apartment dots when the bookmark set changes.
+      const bookmarkEffect = effect(() => {
+        const ids = [...bookmarks.value];
+        const layer = pointLayerId("apartments");
+        if (installedRef.current.has("apartments") && map.getLayer(layer)) {
+          map.setPaintProperty(layer, "circle-color", bookmarkColorExpr(ids));
+          map.setPaintProperty(layer, "circle-radius", bookmarkRadiusExpr(ids));
+        }
+      });
+      disposers.push(bookmarkEffect);
 
       // Re-apply per-category subcategory filters whenever they change.
       const filterEffect = effect(() => {

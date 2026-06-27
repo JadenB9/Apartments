@@ -68,6 +68,18 @@ const MAX_RETRIES = 3;
 // Overpass types (minimal)
 // ---------------------------------------------------------------------------
 
+interface LatLon {
+  lat: number;
+  lon: number;
+}
+
+interface OverpassMember {
+  type: "node" | "way" | "relation";
+  ref: number;
+  role: string;
+  geometry?: LatLon[];
+}
+
 interface OverpassElement {
   type: "node" | "way" | "relation";
   id: number;
@@ -75,6 +87,8 @@ interface OverpassElement {
   lon?: number;
   center?: { lat: number; lon: number };
   tags?: Record<string, string>;
+  geometry?: LatLon[];
+  members?: OverpassMember[];
 }
 
 interface OverpassResponse {
@@ -88,11 +102,13 @@ interface OverpassResponse {
 const b = BBOX_LITERAL;
 
 const QUERIES = {
-  apartments: `[out:json][timeout:120];
+  apartments: `[out:json][timeout:180];
 (
   nwr["building"~"apartments|residential|dormitory"](${b});
   nwr["residential"="apartments"](${b});
   nwr["building:use"="apartments"](${b});
+  nwr["landuse"="residential"]["residential"="apartments"](${b});
+  nwr["building"]["name"~"apartment|condominium|condo|residence|tower|loft|avalon|the reserve",i](${b});
 );
 out center tags;`,
 
@@ -118,9 +134,18 @@ out center tags;`,
 
   towns: `[out:json][timeout:120];
 (
-  node["place"~"town|village|suburb|neighbourhood|hamlet"](${b});
+  node["place"~"city|town|village|suburb|neighbourhood|hamlet"](${b});
 );
-out tags;`,
+out;`,
+
+  // The Fort George G. Meade installation boundary (a multipolygon relation),
+  // so we can draw the real outline instead of an approximation.
+  fortMeade: `[out:json][timeout:60];
+(
+  relation["landuse"="military"]["name"~"Meade",i](${b});
+  way["landuse"="military"]["name"~"Meade",i](${b});
+);
+out geom;`,
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -141,7 +166,11 @@ async function runOverpass(label: string, query: string): Promise<OverpassElemen
       try {
         const res = await fetch(endpoint, {
           method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            // Overpass returns 406 to requests without a descriptive User-Agent.
+            "User-Agent": "bw-corridor-map/1.0 (personal apartment-finder project)",
+          },
           body: new URLSearchParams({ data: query }).toString(),
         });
 
@@ -272,6 +301,10 @@ function toFeature(place: Place & Partial<Apartment>): PlaceFeature {
 
 const EXCLUDED_TOWNS = new Set(["Baltimore", "Washington"]);
 
+// Recognizable places only — drop the hundreds of tiny neighbourhood/hamlet
+// nodes that would otherwise bury the town list and the map labels.
+const MEANINGFUL_PLACE_TYPES = new Set(["city", "town", "village", "suburb"]);
+
 function buildTowns(elements: OverpassElement[]): Town[] {
   const seen = new Set<string>();
   const towns: Town[] = [];
@@ -280,6 +313,7 @@ function buildTowns(elements: OverpassElement[]): Town[] {
     const name = tags.name;
     const placeType = tags.place;
     if (!name || !placeType) continue;
+    if (!MEANINGFUL_PLACE_TYPES.has(placeType)) continue;
     if (EXCLUDED_TOWNS.has(name)) continue;
     const coords = coordsOf(el);
     if (!coords) continue;
@@ -289,6 +323,78 @@ function buildTowns(elements: OverpassElement[]): Town[] {
     towns.push({ name, lat: coords.lat, lng: coords.lng, placeType });
   }
   return towns;
+}
+
+// ---------------------------------------------------------------------------
+// Fort Meade boundary (stitch multipolygon outer ways into closed rings)
+// ---------------------------------------------------------------------------
+
+type Ring = [number, number][];
+
+const ptKey = (p: [number, number]) => `${p[0].toFixed(7)},${p[1].toFixed(7)}`;
+
+/** Greedily connect way segments end-to-end into closed rings. */
+function stitchRings(ways: Ring[]): Ring[] {
+  const segs = ways.filter((w) => w.length > 1).map((w) => w.slice());
+  const used = new Array(segs.length).fill(false);
+  const rings: Ring[] = [];
+
+  for (let i = 0; i < segs.length; i++) {
+    if (used[i]) continue;
+    used[i] = true;
+    let ring = segs[i].slice();
+    let extended = true;
+    while (extended) {
+      extended = false;
+      const end = ring[ring.length - 1];
+      for (let j = 0; j < segs.length; j++) {
+        if (used[j]) continue;
+        const s = segs[j];
+        if (ptKey(s[0]) === ptKey(end)) {
+          ring = ring.concat(s.slice(1));
+          used[j] = true;
+          extended = true;
+          break;
+        }
+        if (ptKey(s[s.length - 1]) === ptKey(end)) {
+          ring = ring.concat(s.slice().reverse().slice(1));
+          used[j] = true;
+          extended = true;
+          break;
+        }
+      }
+    }
+    if (ring.length >= 4) rings.push(ring);
+  }
+  return rings;
+}
+
+/** Build a GeoJSON Feature (Polygon/MultiPolygon) for the Fort Meade boundary. */
+function buildFortMeade(elements: OverpassElement[]): unknown | null {
+  const rel = elements.find((e) => e.type === "relation" && e.members?.length);
+  let outerWays: Ring[] = [];
+  let name = "Fort George G. Meade";
+
+  if (rel) {
+    name = rel.tags?.name ?? name;
+    outerWays = (rel.members ?? [])
+      .filter((m) => m.role === "outer" && m.geometry && m.geometry.length > 1)
+      .map((m) => m.geometry!.map((g) => [g.lon, g.lat] as [number, number]));
+  } else {
+    const ways = elements.filter((e) => e.type === "way" && e.geometry?.length);
+    outerWays = ways.map((w) => w.geometry!.map((g) => [g.lon, g.lat] as [number, number]));
+    name = ways[0]?.tags?.name ?? name;
+  }
+
+  const rings = stitchRings(outerWays);
+  if (!rings.length) return null;
+
+  const geometry =
+    rings.length === 1
+      ? { type: "Polygon", coordinates: [rings[0]] }
+      : { type: "MultiPolygon", coordinates: rings.map((r) => [r]) };
+
+  return { type: "Feature", properties: { name }, geometry };
 }
 
 // ---------------------------------------------------------------------------
@@ -451,6 +557,9 @@ async function main() {
   await sleep(POLITE_DELAY_MS);
 
   const entertainmentRaw = await runOverpass("entertainment", QUERIES.entertainment);
+  await sleep(POLITE_DELAY_MS);
+
+  const fortMeadeRaw = await runOverpass("fortMeade", QUERIES.fortMeade);
 
   // 2. Normalize.
   console.log("\nNormalizing…");
@@ -472,6 +581,13 @@ async function main() {
   await writeJson("food.json", fc(places.food.map(toFeature)));
   await writeJson("shopping.json", fc(places.shopping.map(toFeature)));
   await writeJson("entertainment.json", fc(places.entertainment.map(toFeature)));
+
+  const fortMeade = buildFortMeade(fortMeadeRaw);
+  if (fortMeade) {
+    await writeJson("fort-meade.json", fortMeade);
+  } else {
+    console.warn("  !! Fort Meade boundary not found — skipping fort-meade.json");
+  }
 
   const counts = buildCounts(places);
   const categoriesPayload: CategoriesPayload = {
