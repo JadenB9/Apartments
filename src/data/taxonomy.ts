@@ -205,6 +205,12 @@ function looksMultiUnit(tags: Record<string, string>): boolean {
   );
 }
 
+// Names that read like an apartment / condo community. Used to rescue complexes
+// that OSM only tags as a named `landuse=residential` polygon or `building=yes`
+// (e.g. "Snowden Overlook", "The Elms at Kendall Ridge", "Park View at …").
+export const APT_NAME_RE =
+  /apartment|condo|residence|towers?|lofts?|overlook|park view|the \w+ at |reserve|avalon|pointe|gardens/i;
+
 function classifyApartment(tags: Record<string, string>): Classified | null {
   const building = tags.building;
   const name = tags.name ?? "";
@@ -227,8 +233,14 @@ function classifyApartment(tags: Record<string, string>): Classified | null {
   if (building === "residential" && looksMultiUnit(tags)) {
     return { category: "apartments", subcategory: "residential" };
   }
-  // Any building whose name clearly reads like a complex.
-  if (building && /apartment|condo|residence|towers?|lofts?|the reserve|avalon/i.test(name)) {
+  // A named building or residential area that reads like a complex — but never
+  // a POI (a restaurant called "… Gardens" is not an apartment).
+  const isPOI = !!(tags.amenity || tags.shop || tags.leisure || tags.tourism || tags.office);
+  if (
+    !isPOI &&
+    (building || tags.landuse === "residential") &&
+    APT_NAME_RE.test(name)
+  ) {
     return { category: "apartments", subcategory: /condo/i.test(name) ? "condo" : "apartments" };
   }
   return null;

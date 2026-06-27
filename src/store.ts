@@ -269,6 +269,46 @@ export function clearNearby(): void {
   if (had) for (const cat of NEARBY_CATEGORIES) toggleCategory(cat, false);
 }
 
+// Flat, distance-sorted list of amenities within the nearby radius — feeds the
+// filterable nearby-places list.
+export interface NearbyPlace {
+  id: string;
+  name: string;
+  category: CategoryId;
+  subcategory: string;
+  lat: number;
+  lng: number;
+  distanceMi: number;
+}
+
+export const nearbyPlaces = computed<NearbyPlace[]>(() => {
+  const focus = nearbyFocus.value;
+  if (!focus) return [];
+  const radius = nearbyRadiusMi.value;
+  const out: NearbyPlace[] = [];
+  for (const cat of NEARBY_CATEGORIES) {
+    const fc = categoryData.value[cat];
+    if (!fc) continue;
+    for (const f of fc.features) {
+      const [lng, lat] = f.geometry.coordinates;
+      const distanceMi = milesBetween(lng, lat, focus.lng, focus.lat);
+      if (distanceMi > radius) continue;
+      const p = f.properties;
+      out.push({
+        id: p.id,
+        name: p.name,
+        category: p.category,
+        subcategory: p.subcategory,
+        lat,
+        lng,
+        distanceMi,
+      });
+    }
+  }
+  out.sort((a, b) => a.distanceMi - b.distanceMi);
+  return out;
+});
+
 // Helper to know whether a feature passes the active subcategory filter.
 export function featurePassesFilter(f: PlaceFeature): boolean {
   const p = f.properties;

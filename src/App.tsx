@@ -3,6 +3,7 @@ import { MapView } from "./map/MapView";
 import { SearchBox } from "./components/SearchBox";
 import { AreaPanel } from "./components/AreaPanel";
 import { BookmarksPanel } from "./components/BookmarksPanel";
+import { NearbyPanel } from "./components/NearbyPanel";
 import { Sidebar } from "./components/Sidebar";
 import { ApartmentTiles } from "./components/ApartmentTiles";
 
@@ -22,6 +23,7 @@ export function App() {
         </header>
         <SearchBox />
         <div class="panel-scroll">
+          <NearbyPanel />
           <BookmarksPanel />
           <AreaPanel />
           <Sidebar />

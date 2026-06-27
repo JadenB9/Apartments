@@ -108,7 +108,8 @@ const QUERIES = {
   nwr["residential"="apartments"](${b});
   nwr["building:use"="apartments"](${b});
   nwr["landuse"="residential"]["residential"="apartments"](${b});
-  nwr["building"]["name"~"apartment|condominium|condo|residence|tower|loft|avalon|the reserve",i](${b});
+  nwr["building"]["name"~"apartment|condominium|condo|residence|tower|loft|avalon|reserve|overlook|park view|pointe|gardens|the .+ at ",i](${b});
+  nwr["landuse"="residential"]["name"~"apartment|condominium|condo|residence|tower|loft|avalon|reserve|overlook|park view|pointe|gardens|the .+ at ",i](${b});
 );
 out center tags;`,
 
@@ -630,6 +631,13 @@ function mergeApartmentComplexes(apts: Apartment[], thresholdM = 80): Apartment[
     if (ra !== rb) parent[ra] = rb;
   };
 
+  const isGenericName = (name: string) =>
+    !name || name === "Unnamed" || /^Apartment Building/.test(name);
+  // Two buildings may merge only if at least one is generic, or they share a
+  // name — so distinct named complexes that sit close stay separate.
+  const mergeable = (a: Apartment, b: Apartment) =>
+    isGenericName(a.name) || isGenericName(b.name) || a.name === b.name;
+
   // Spatial grid (~thresholdM cells) so we only compare nearby buildings.
   const cell = thresholdM / 111_000; // degrees latitude per metre, approx
   const cx = (lng: number) => Math.floor(lng / cell);
@@ -652,7 +660,10 @@ function mergeApartmentComplexes(apts: Apartment[], thresholdM = 80): Apartment[
         for (const j of arr) {
           if (j <= i) continue;
           const b = apts[j];
-          if (haversineKm(a.lat, a.lng, b.lat, b.lng) * 1000 <= thresholdM) {
+          if (
+            haversineKm(a.lat, a.lng, b.lat, b.lng) * 1000 <= thresholdM &&
+            mergeable(a, b)
+          ) {
             union(i, j);
           }
         }
