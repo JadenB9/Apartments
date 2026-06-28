@@ -64,6 +64,18 @@ const KEPT_TAG_KEYS = [
 const POLITE_DELAY_MS = 1500; // delay between Overpass queries
 const MAX_RETRIES = 3;
 
+// Hand-added complexes that OpenStreetMap maps only as generic terraced/`yes`
+// buildings (no apartment tag, no name), so they can't be auto-detected without
+// pulling in thousands of owner-occupied townhomes. Add known complexes here.
+const EXTRA_APARTMENTS: Array<{
+  name: string;
+  lat: number;
+  lng: number;
+  subcategory?: string;
+}> = [
+  { name: "Sherwood Crossing", lat: 39.19165, lng: -76.78623 },
+];
+
 // ---------------------------------------------------------------------------
 // Overpass types (minimal)
 // ---------------------------------------------------------------------------
@@ -829,6 +841,23 @@ async function main() {
   console.log(
     `  merged apartments: ${rawApartments} buildings -> ${places.apartments.length} complexes`,
   );
+
+  // 2c. Hand-added complexes OSM doesn't tag as apartments.
+  for (const x of EXTRA_APARTMENTS) {
+    const town = nearestTown(x.lat, x.lng, towns);
+    places.apartments.push({
+      id: `manual/${x.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+      name: x.name,
+      category: "apartments",
+      subcategory: x.subcategory ?? "apartments",
+      lat: x.lat,
+      lng: x.lng,
+      ...(town ? { town } : {}),
+      tags: { source: "manual" },
+      links: buildApartmentLinks({ name: x.name, lat: x.lat, lng: x.lng, town }),
+    });
+  }
+  console.log(`  + ${EXTRA_APARTMENTS.length} hand-added complexes`);
 
   // 3. Write output.
   console.log("\nWriting JSON…");
