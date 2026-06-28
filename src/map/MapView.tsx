@@ -23,15 +23,19 @@ import "maplibre-gl/dist/maplibre-gl.css";
 
 import {
   activeFilters,
+  addPin,
   bookmarks,
   categoryData,
   clearNearby,
+  customPins,
   distanceToFortMeadeMi,
   enabledCategories,
   isBookmarked,
   mapActions,
   nearbyFocus,
   nearbyRadiusMi,
+  pinPlacingMode,
+  removePin,
   selectedCountyNames,
   selectedPlaceId,
   selectedTowns,
@@ -236,6 +240,19 @@ function ensurePopupStyles(): void {
 }
 .mv-popup .mv-nearby:hover { background: #dcf0e1; }
 .mv-popup .mv-nearby.on { color: #fff; background: #2b8a3e; border-color: #2b8a3e; }
+.mv-popup .mv-pin-remove {
+  margin-top: 4px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #c2255c;
+  background: #ffe3ee;
+  border: 1px solid #f2a9c7;
+  border-radius: 6px;
+}
+.mv-popup .mv-pin-remove:hover { background: #ffd0e3; }
+.mv-pin-ctrl button { font-size: 15px; line-height: 29px; }
+.mv-pin-ctrl button.active { background: #e64980; }
 `;
   document.head.appendChild(el);
 }
@@ -372,6 +389,29 @@ export function MapView() {
     mapRef.current = map;
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
 
+    // Custom-pin control: toggles pin-placing mode.
+    let pinBtnRef: HTMLButtonElement | null = null;
+    const pinControl: maplibregl.IControl = {
+      onAdd() {
+        const c = document.createElement("div");
+        c.className = "maplibregl-ctrl maplibregl-ctrl-group mv-pin-ctrl";
+        const b = document.createElement("button");
+        b.type = "button";
+        b.title = "Drop a custom pin, then click the map";
+        b.textContent = "📍";
+        b.addEventListener("click", () => {
+          pinPlacingMode.value = !pinPlacingMode.value;
+        });
+        c.appendChild(b);
+        pinBtnRef = b;
+        return c;
+      },
+      onRemove() {
+        pinBtnRef = null;
+      },
+    };
+    map.addControl(pinControl, "top-right");
+
     const disposers: Array<() => void> = [];
 
     // ---- Adds a clustered source + 3 layers for one category. ----
@@ -493,6 +533,7 @@ export function MapView() {
 
     // ---- Cluster click: zoom to expansion zoom. ----
     function onClusterClick(e: MapLayerMouseEvent): void {
+      if (pinPlacingMode.value) return;
       const feature = e.features?.[0] as MapGeoJSONFeature | undefined;
       if (!feature) return;
       const clusterId = feature.properties?.cluster_id;
@@ -522,6 +563,7 @@ export function MapView() {
 
     // ---- Point click: open the same detailed popup as the sidebar. ----
     function onPointClick(e: MapLayerMouseEvent): void {
+      if (pinPlacingMode.value) return;
       const feature = e.features?.[0];
       if (!feature) return;
       const coords = (feature.geometry as GeoJSON.Point).coordinates as [number, number];
@@ -531,6 +573,32 @@ export function MapView() {
         (feature.properties as unknown as PlaceFeature["properties"]);
       selectedPlaceId.value = id ?? null;
       openPopupAt(coords, props);
+    }
+
+    // Popup for a custom pin (maps link + remove).
+    function openPinPopup(id: string, name: string, coords: [number, number]): void {
+      popupRef.current?.remove();
+      const gmaps = `https://www.google.com/maps/search/?api=1&query=${coords[1]},${coords[0]}`;
+      const html = `<div class="mv-popup">
+        <h3>📍 ${esc(name)}</h3>
+        <div class="mv-links"><a href="${gmaps}" target="_blank" rel="noopener">Open in Google Maps</a></div>
+        <button type="button" class="mv-pin-remove" data-id="${esc(id)}">✕ Remove pin</button>
+      </div>`;
+      popupRef.current = new maplibregl.Popup({
+        className: "mv-popup",
+        closeButton: true,
+        maxWidth: "260px",
+      })
+        .setLngLat(coords)
+        .setHTML(html)
+        .addTo(map);
+      const rm = popupRef.current.getElement()?.querySelector(".mv-pin-remove");
+      if (rm) {
+        rm.addEventListener("click", () => {
+          removePin(id);
+          popupRef.current?.remove();
+        });
+      }
     }
 
     function openPopupAt(
@@ -769,6 +837,7 @@ export function MapView() {
 
       // ---- Click a town label/dot to focus it: select it + reveal nearby. ----
       function onTownClick(e: MapLayerMouseEvent): void {
+        if (pinPlacingMode.value) return;
         const f = e.features?.[0];
         if (!f) return;
         const name = (f.properties as { name?: string }).name;
@@ -783,6 +852,84 @@ export function MapView() {
         map.on("mouseenter", id, onEnter);
         map.on("mouseleave", id, onLeave);
       }
+
+      // ---- Custom pins: user-dropped markers. ----
+      map.addSource("src-pins", { type: "geojson", data: EMPTY_FC });
+      map.addLayer({
+        id: "pins",
+        type: "circle",
+        source: "src-pins",
+        paint: {
+          "circle-radius": 8,
+          "circle-color": "#e64980",
+          "circle-stroke-color": "#ffffff",
+          "circle-stroke-width": 2.5,
+        },
+      });
+      map.addLayer({
+        id: "pin-labels",
+        type: "symbol",
+        source: "src-pins",
+        layout: {
+          "text-field": ["get", "name"],
+          "text-font": LABEL_FONT,
+          "text-size": 11,
+          "text-anchor": "top",
+          "text-offset": [0, 0.8],
+          "text-padding": 4,
+        },
+        paint: {
+          "text-color": "#ffd6e7",
+          "text-halo-color": "rgba(0,0,0,0.85)",
+          "text-halo-width": 1.5,
+        },
+      });
+
+      const pinsEffect = effect(() => {
+        const src = map.getSource("src-pins") as GeoJSONSource | undefined;
+        if (!src) return;
+        src.setData({
+          type: "FeatureCollection",
+          features: customPins.value.map((p) => ({
+            type: "Feature",
+            properties: { id: p.id, name: p.name },
+            geometry: { type: "Point", coordinates: [p.lng, p.lat] },
+          })),
+        });
+      });
+      disposers.push(pinsEffect);
+
+      // Click an existing pin -> popup with a maps link + remove.
+      map.on("click", "pins", (e: MapLayerMouseEvent) => {
+        if (pinPlacingMode.value) return;
+        const f = e.features?.[0];
+        if (!f) return;
+        const id = (f.properties as { id?: string }).id;
+        const nm = (f.properties as { name?: string }).name || "Pin";
+        const [lng, lat] = (f.geometry as GeoJSON.Point).coordinates as [number, number];
+        if (!id) return;
+        selectedPlaceId.value = null;
+        openPinPopup(id, nm, [lng, lat]);
+      });
+      map.on("mouseenter", "pins", onEnter);
+      map.on("mouseleave", "pins", onLeave);
+
+      // Pin-placing mode: next map click drops a pin there.
+      map.on("click", (e) => {
+        if (!pinPlacingMode.value) return;
+        const id = addPin(e.lngLat.lng, e.lngLat.lat);
+        pinPlacingMode.value = false;
+        const pin = customPins.value.find((p) => p.id === id);
+        if (pin) openPinPopup(pin.id, pin.name, [pin.lng, pin.lat]);
+      });
+
+      // Cursor + body class reflect placing mode.
+      const placingEffect = effect(() => {
+        const on = pinPlacingMode.value;
+        map.getCanvas().style.cursor = on ? "crosshair" : "";
+        if (pinBtnRef) pinBtnRef.classList.toggle("active", on);
+      });
+      disposers.push(placingEffect);
 
       // ---- Clear, bold corridor town labels (drawn on top). ----
       const townsEffect = effect(() => {
