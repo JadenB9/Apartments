@@ -155,6 +155,62 @@ export function isBookmarked(id: string): boolean {
   return bookmarks.value.has(id);
 }
 
+// ---- Custom pins (user-dropped markers, persisted to localStorage) ----
+export interface CustomPin {
+  id: string;
+  name: string;
+  lng: number;
+  lat: number;
+}
+const PINS_KEY = "bw-corridor-pins";
+
+function loadPins(): CustomPin[] {
+  try {
+    const raw = localStorage.getItem(PINS_KEY);
+    if (raw) return JSON.parse(raw) as CustomPin[];
+  } catch {
+    /* ignore */
+  }
+  return [];
+}
+
+export const customPins = signal<CustomPin[]>(loadPins());
+// When true, the next map click drops a pin.
+export const pinPlacingMode = signal<boolean>(false);
+
+function persistPins(): void {
+  try {
+    localStorage.setItem(PINS_KEY, JSON.stringify(customPins.value));
+  } catch {
+    /* ignore */
+  }
+}
+
+export function addPin(lng: number, lat: number, name?: string): string {
+  const id = `pin-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const pin: CustomPin = {
+    id,
+    name: name?.trim() || `Pin ${customPins.value.length + 1}`,
+    lng: +lng.toFixed(6),
+    lat: +lat.toFixed(6),
+  };
+  customPins.value = [...customPins.value, pin];
+  persistPins();
+  return id;
+}
+
+export function renamePin(id: string, name: string): void {
+  customPins.value = customPins.value.map((p) =>
+    p.id === id ? { ...p, name } : p,
+  );
+  persistPins();
+}
+
+export function removePin(id: string): void {
+  customPins.value = customPins.value.filter((p) => p.id !== id);
+  persistPins();
+}
+
 // Bookmarked apartments (for the sidebar list), regardless of area selection.
 export const bookmarkedApartments = computed<Apartment[]>(() => {
   const bm = bookmarks.value;
