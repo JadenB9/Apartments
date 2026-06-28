@@ -10,24 +10,95 @@ export interface PlaceLinkInput {
   address?: string;
 }
 
-function q(parts: (string | undefined)[]): string {
-  return encodeURIComponent(parts.filter(Boolean).join(" "));
+// A name is "generic" when it came from an unnamed OSM building (e.g.
+// "Apartment Building" or "Apartment Building (Foo Street)"). Google can't
+// resolve those to a place, so we fall back to coordinates instead.
+function isGenericName(name?: string): boolean {
+  return !name || /^apartment building/i.test(name.trim());
+}
+
+// apartments.com / Zillow address pages key off a real municipality. Our town
+// field is OSM-derived and is sometimes a neighborhood or village; map the
+// unambiguous ones to their parent city so the rental-site links resolve.
+// Only high-confidence corrections live here — verified cities are left alone.
+const TOWN_TO_CITY: Record<string, string> = {
+  // Columbia, MD villages
+  "Long Reach": "Columbia",
+  "Owen Brown": "Columbia",
+  "Wilde Lake": "Columbia",
+  "Harper's Choice": "Columbia",
+  "Dorsey's Search": "Columbia",
+  "Kings Contrivance": "Columbia",
+  "River Hill": "Columbia",
+  "Columbia Town Center": "Columbia",
+  "Plum Tree": "Columbia",
+  // Ellicott City, MD neighborhoods (Google-verified for Gray Rock)
+  "Gray Rock": "Ellicott City",
+  "Dunloggin": "Ellicott City",
+  // Baltimore, MD neighborhoods
+  "South Baltimore": "Baltimore",
+  "Highlandtown": "Baltimore",
+  "Sowebo": "Baltimore",
+  "Cherry Hill": "Baltimore",
+  // College Park, MD neighborhoods
+  "Lakeland": "College Park",
+  "College Park Woods": "College Park",
+  "Berwyn": "College Park",
+  "Hollywood": "College Park",
+  // Annapolis, MD
+  "Parole": "Annapolis",
+  "Annapolis Neck": "Annapolis",
+  // Laurel, MD
+  "North Laurel": "Laurel",
+  "South Laurel": "Laurel",
+  "Russett": "Laurel",
+  // Odenton, MD (Google-verified for Piney Orchard)
+  "Piney Orchard": "Odenton",
+  "Fort Meade": "Odenton",
+  // Bowie, MD
+  "Old Town Bowie": "Bowie",
+};
+
+function rentalCity(town?: string): string | undefined {
+  if (!town) return undefined;
+  return TOWN_TO_CITY[town] ?? town;
+}
+
+// "Ellicott City" -> "ellicott-city-md"
+function citySlug(city: string): string {
+  return (
+    city
+      .toLowerCase()
+      .replace(/['']/g, "")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") + "-md"
+  );
 }
 
 export function googleMapsLink({ name, lat, lng }: PlaceLinkInput): string {
-  // Prefer name+coords so the pin lands on the right place.
-  const query = name
-    ? `${encodeURIComponent(name)}@${lat},${lng}`
-    : `${lat},${lng}`;
+  // For a real complex name, "name@lat,lng" resolves to its Google place page
+  // (with the pin at the right spot). For unnamed buildings, search the bare
+  // coordinates so the pin still lands exactly on the building.
+  const query = isGenericName(name)
+    ? `${lat},${lng}`
+    : `${encodeURIComponent(name as string)}@${lat},${lng}`;
   return `https://www.google.com/maps/search/?api=1&query=${query}`;
 }
 
-export function apartmentsComLink({ name, town, address }: PlaceLinkInput): string {
-  return `https://www.apartments.com/search/?q=${q([name, address, town, "MD"])}`;
+export function apartmentsComLink({ town }: PlaceLinkInput): string {
+  const city = rentalCity(town);
+  // City page is apartments.com's canonical, query-respecting URL. The old
+  // /search/?q= endpoint ignored the term and geolocated to the visitor's IP.
+  return city
+    ? `https://www.apartments.com/${citySlug(city)}/`
+    : "https://www.apartments.com/md/";
 }
 
-export function zillowLink({ name, town, address }: PlaceLinkInput): string {
-  return `https://www.zillow.com/homes/${q([name, address, town, "MD"])}_rb/`;
+export function zillowLink({ town }: PlaceLinkInput): string {
+  const city = rentalCity(town);
+  return city
+    ? `https://www.zillow.com/${citySlug(city)}/rentals/`
+    : "https://www.zillow.com/md/rentals/";
 }
 
 export function buildApartmentLinks(input: PlaceLinkInput) {

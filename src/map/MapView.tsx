@@ -46,6 +46,7 @@ import {
   viewportBounds,
 } from "../store";
 import { loadCore, loadCategory } from "../data/loader";
+import { googleMapsLink } from "../data/links";
 import { CATEGORIES, CATEGORY_BY_ID } from "../data/taxonomy";
 import { MAP_BOUNDS, MAP_CENTER, INITIAL_ZOOM } from "../data/config";
 import type { CategoryId, PlaceFeature } from "../data/types";
@@ -339,14 +340,14 @@ function popupHTML(props: PlaceFeature["properties"]): string {
       ?.label || props.subcategory;
   const tags = props.tags ?? {};
   const website = tags.website || tags["contact:website"];
+  const gmaps = googleMapsLink({ name: props.name, lat: props.lat, lng: props.lng });
   return `<div class="mv-popup">
     <h3>${name}</h3>
     <p class="mv-sub">${esc(subLabel)}</p>
-    ${
-      website
-        ? `<div class="mv-links"><a href="${esc(website)}" target="_blank" rel="noopener">Website</a></div>`
-        : ""
-    }
+    <div class="mv-links">
+      <a href="${esc(gmaps)}" target="_blank" rel="noopener">Google Maps</a>
+      ${website ? `<a href="${esc(website)}" target="_blank" rel="noopener">Website</a>` : ""}
+    </div>
   </div>`;
 }
 

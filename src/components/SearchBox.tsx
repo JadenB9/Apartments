@@ -9,6 +9,9 @@ export function SearchBox() {
       <input
         class="searchbox-input"
         type="text"
+        id="place-search"
+        name="place-search"
+        aria-label="Search apartments or towns"
         value={q}
         placeholder="Search apartments or towns…"
         onInput={(e) => {
