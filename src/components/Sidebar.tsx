@@ -6,26 +6,45 @@ import {
   activeFilters,
   categoriesMeta,
   isSubActive,
+  nearbyRadiusMi,
   toggleCategory,
   toggleSub,
 } from "../store";
 
-// Category tree. Each category is a collapsible section with a master checkbox,
-// a count badge, a color swatch, and per-subcategory rows. Toggling a
-// non-apartments category/sub ON kicks off lazy data loading for the map.
+// Category tree for the amenity layers (food / shopping / entertainment).
+// Apartments are handled separately by the area picker, so they're excluded
+// here. Each category is a collapsible section with a master checkbox, a count
+// badge, a color swatch, and per-subcategory rows. Toggling ON lazy-loads data.
+const AMENITY_CATEGORIES = CATEGORIES.filter((c) => c.id !== "apartments");
+
 export function Sidebar() {
-  // Default: only "apartments" expanded.
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({
-    apartments: true,
-  });
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
   // Read these signals so the component re-renders on filter/meta changes.
   const counts = categoriesMeta.value?.counts ?? {};
   const filters = activeFilters.value; // subscribe to filter changes
 
+  const radius = nearbyRadiusMi.value; // subscribe
+
   return (
     <div class="sidebar-tree">
-      {CATEGORIES.map((cat) => {
+      <div class="sidebar-heading">Amenities near apartments</div>
+      <div class="radius-row">
+        <span class="radius-label">Nearby radius</span>
+        <input
+          class="radius-slider"
+          type="range"
+          min="0.5"
+          max="10"
+          step="0.5"
+          value={radius}
+          onInput={(e) => {
+            nearbyRadiusMi.value = Number(e.currentTarget.value);
+          }}
+        />
+        <span class="radius-val">{radius} mi</span>
+      </div>
+      {AMENITY_CATEGORIES.map((cat) => {
         const isOpen = !!expanded[cat.id];
         const subKeys = cat.subcategories.map((s) => `${cat.id}:${s.id}`);
         const activeCount = subKeys.filter((k) => filters.has(k)).length;
@@ -119,7 +138,29 @@ const styles = `
 .sidebar-tree {
   flex: 1 1 auto;
   overflow-y: auto;
-  padding: 6px 0;
+  padding: 0 0 6px;
+}
+.sidebar-heading {
+  padding: 10px 12px 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+.radius-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 12px 8px;
+}
+.radius-label { font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+.radius-slider { flex: 1 1 auto; accent-color: var(--accent); cursor: pointer; min-width: 0; }
+.radius-val {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  min-width: 42px;
+  text-align: right;
 }
 .cat { border-bottom: 1px solid var(--border); }
 .cat-header {

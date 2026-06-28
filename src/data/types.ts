@@ -30,6 +30,7 @@ export interface Town {
   lat: number;
   lng: number;
   placeType: string; // town | village | suburb | neighbourhood
+  county?: string; // assigned via county-boundary point-in-polygon
 }
 
 // Taxonomy shape: top categories -> ordered subcategories.

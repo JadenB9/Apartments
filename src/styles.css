@@ -1,17 +1,21 @@
 :root {
-  --bg: #14161a;
-  --panel: #1c1f26;
-  --panel-2: #232732;
-  --border: #2c313c;
-  --text: #e8eaed;
-  --muted: #9aa0ac;
-  --accent: #4dabf7;
-  --apartments: #e8590c;
-  --food: #f03e3e;
-  --shopping: #845ef7;
-  --entertainment: #37b24d;
+  /* Warm "paper" light theme — hand-set palette, not a stock dashboard. */
+  --bg: #ebe5d8;
+  --panel: #f7f3ea;
+  --panel-2: #ece5d6;
+  --border: #d9cfba;
+  --text: #2a2620;
+  --muted: #8a7f6b;
+  --accent: #1f6f6b;
+  --accent-soft: #d7e6e3;
+  --bookmark: #1971c2;
+  --bookmark-soft: #e7f1fb;
+  --apartments: #d9480f;
+  --food: #c2410c;
+  --shopping: #6741d9;
+  --entertainment: #2b8a3e;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 * { box-sizing: border-box; }

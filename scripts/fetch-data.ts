@@ -64,9 +64,33 @@ const KEPT_TAG_KEYS = [
 const POLITE_DELAY_MS = 1500; // delay between Overpass queries
 const MAX_RETRIES = 3;
 
+// Hand-added complexes that OpenStreetMap maps only as generic terraced/`yes`
+// buildings (no apartment tag, no name), so they can't be auto-detected without
+// pulling in thousands of owner-occupied townhomes. Add known complexes here.
+const EXTRA_APARTMENTS: Array<{
+  name: string;
+  lat: number;
+  lng: number;
+  subcategory?: string;
+}> = [
+  { name: "Sherwood Crossing", lat: 39.19165, lng: -76.78623 },
+];
+
 // ---------------------------------------------------------------------------
 // Overpass types (minimal)
 // ---------------------------------------------------------------------------
+
+interface LatLon {
+  lat: number;
+  lon: number;
+}
+
+interface OverpassMember {
+  type: "node" | "way" | "relation";
+  ref: number;
+  role: string;
+  geometry?: LatLon[];
+}
 
 interface OverpassElement {
   type: "node" | "way" | "relation";
@@ -75,6 +99,8 @@ interface OverpassElement {
   lon?: number;
   center?: { lat: number; lon: number };
   tags?: Record<string, string>;
+  geometry?: LatLon[];
+  members?: OverpassMember[];
 }
 
 interface OverpassResponse {
@@ -88,11 +114,14 @@ interface OverpassResponse {
 const b = BBOX_LITERAL;
 
 const QUERIES = {
-  apartments: `[out:json][timeout:120];
+  apartments: `[out:json][timeout:180];
 (
   nwr["building"~"apartments|residential|dormitory"](${b});
   nwr["residential"="apartments"](${b});
   nwr["building:use"="apartments"](${b});
+  nwr["landuse"="residential"]["residential"="apartments"](${b});
+  nwr["building"]["name"~"apartment|condominium|condo|residence|tower|loft|avalon|reserve|overlook|park view|pointe|gardens|the .+ at ",i](${b});
+  nwr["landuse"="residential"]["name"~"apartment|condominium|condo|residence|tower|loft|avalon|reserve|overlook|park view|pointe|gardens|the .+ at ",i](${b});
 );
 out center tags;`,
 
@@ -118,9 +147,24 @@ out center tags;`,
 
   towns: `[out:json][timeout:120];
 (
-  node["place"~"town|village|suburb|neighbourhood|hamlet"](${b});
+  node["place"~"city|town|village|suburb|neighbourhood|hamlet"](${b});
 );
-out tags;`,
+out;`,
+
+  // The Fort George G. Meade installation boundary (a multipolygon relation),
+  // so we can draw the real outline instead of an approximation.
+  fortMeade: `[out:json][timeout:60];
+(
+  relation["landuse"="military"]["name"~"Meade",i](${b});
+  way["landuse"="military"]["name"~"Meade",i](${b});
+);
+out geom;`,
+
+  // County boundaries (admin_level=6) so towns can be grouped by county in the
+  // area drill-down. `out geom` gives each member way's geometry to stitch.
+  counties: `[out:json][timeout:90];
+relation["boundary"="administrative"]["admin_level"="6"](${b});
+out geom;`,
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -141,7 +185,11 @@ async function runOverpass(label: string, query: string): Promise<OverpassElemen
       try {
         const res = await fetch(endpoint, {
           method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            // Overpass returns 406 to requests without a descriptive User-Agent.
+            "User-Agent": "bw-corridor-map/1.0 (personal apartment-finder project)",
+          },
           body: new URLSearchParams({ data: query }).toString(),
         });
 
@@ -272,6 +320,10 @@ function toFeature(place: Place & Partial<Apartment>): PlaceFeature {
 
 const EXCLUDED_TOWNS = new Set(["Baltimore", "Washington"]);
 
+// Recognizable places only — drop the hundreds of tiny neighbourhood/hamlet
+// nodes that would otherwise bury the town list and the map labels.
+const MEANINGFUL_PLACE_TYPES = new Set(["city", "town", "village", "suburb"]);
+
 function buildTowns(elements: OverpassElement[]): Town[] {
   const seen = new Set<string>();
   const towns: Town[] = [];
@@ -280,6 +332,7 @@ function buildTowns(elements: OverpassElement[]): Town[] {
     const name = tags.name;
     const placeType = tags.place;
     if (!name || !placeType) continue;
+    if (!MEANINGFUL_PLACE_TYPES.has(placeType)) continue;
     if (EXCLUDED_TOWNS.has(name)) continue;
     const coords = coordsOf(el);
     if (!coords) continue;
@@ -289,6 +342,177 @@ function buildTowns(elements: OverpassElement[]): Town[] {
     towns.push({ name, lat: coords.lat, lng: coords.lng, placeType });
   }
   return towns;
+}
+
+// ---------------------------------------------------------------------------
+// Fort Meade boundary (stitch multipolygon outer ways into closed rings)
+// ---------------------------------------------------------------------------
+
+type Ring = [number, number][];
+
+const ptKey = (p: [number, number]) => `${p[0].toFixed(7)},${p[1].toFixed(7)}`;
+
+/** Greedily connect way segments end-to-end into closed rings. */
+function stitchRings(ways: Ring[]): Ring[] {
+  const segs = ways.filter((w) => w.length > 1).map((w) => w.slice());
+  const used = new Array(segs.length).fill(false);
+  const rings: Ring[] = [];
+
+  for (let i = 0; i < segs.length; i++) {
+    if (used[i]) continue;
+    used[i] = true;
+    let ring = segs[i].slice();
+    let extended = true;
+    while (extended) {
+      extended = false;
+      const end = ring[ring.length - 1];
+      for (let j = 0; j < segs.length; j++) {
+        if (used[j]) continue;
+        const s = segs[j];
+        if (ptKey(s[0]) === ptKey(end)) {
+          ring = ring.concat(s.slice(1));
+          used[j] = true;
+          extended = true;
+          break;
+        }
+        if (ptKey(s[s.length - 1]) === ptKey(end)) {
+          ring = ring.concat(s.slice().reverse().slice(1));
+          used[j] = true;
+          extended = true;
+          break;
+        }
+      }
+    }
+    if (ring.length >= 4) rings.push(ring);
+  }
+  return rings;
+}
+
+/** Build a GeoJSON Feature (Polygon/MultiPolygon) for the Fort Meade boundary. */
+function buildFortMeade(elements: OverpassElement[]): unknown | null {
+  const rel = elements.find((e) => e.type === "relation" && e.members?.length);
+  let outerWays: Ring[] = [];
+  let name = "Fort George G. Meade";
+
+  if (rel) {
+    name = rel.tags?.name ?? name;
+    outerWays = (rel.members ?? [])
+      .filter((m) => m.role === "outer" && m.geometry && m.geometry.length > 1)
+      .map((m) => m.geometry!.map((g) => [g.lon, g.lat] as [number, number]));
+  } else {
+    const ways = elements.filter((e) => e.type === "way" && e.geometry?.length);
+    outerWays = ways.map((w) => w.geometry!.map((g) => [g.lon, g.lat] as [number, number]));
+    name = ways[0]?.tags?.name ?? name;
+  }
+
+  const rings = stitchRings(outerWays);
+  if (!rings.length) return null;
+
+  const geometry =
+    rings.length === 1
+      ? { type: "Polygon", coordinates: [rings[0]] }
+      : { type: "MultiPolygon", coordinates: rings.map((r) => [r]) };
+
+  return { type: "Feature", properties: { name }, geometry };
+}
+
+// ---------------------------------------------------------------------------
+// Counties (assign each town to a county via point-in-polygon)
+// ---------------------------------------------------------------------------
+
+interface County {
+  name: string;
+  rings: Ring[];
+}
+
+function buildCounties(elements: OverpassElement[]): County[] {
+  const counties: County[] = [];
+  for (const el of elements) {
+    if (el.type !== "relation" || !el.members?.length) continue;
+    const name = el.tags?.name;
+    if (!name) continue;
+    const outerWays = el.members
+      .filter((m) => m.role === "outer" && m.geometry && m.geometry.length > 1)
+      .map((m) => m.geometry!.map((g) => [g.lon, g.lat] as [number, number]));
+    const rings = stitchRings(outerWays);
+    if (rings.length) counties.push({ name, rings });
+  }
+  return counties;
+}
+
+/** Ray-casting point-in-ring test. */
+function pointInRing(lng: number, lat: number, ring: Ring): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i][0];
+    const yi = ring[i][1];
+    const xj = ring[j][0];
+    const yj = ring[j][1];
+    const intersect =
+      yi > lat !== yj > lat &&
+      lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+function countyOf(lat: number, lng: number, counties: County[]): string | undefined {
+  for (const c of counties) {
+    if (c.rings.some((r) => pointInRing(lng, lat, r))) return c.name;
+  }
+  return undefined;
+}
+
+/** Douglas–Peucker simplification so county outlines are light to ship. */
+function rdp(points: Ring, eps: number): Ring {
+  if (points.length < 3) return points;
+  const distSq = (p: [number, number], a: [number, number], b: [number, number]) => {
+    const [x, y] = p;
+    const [x1, y1] = a;
+    const [x2, y2] = b;
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    if (dx === 0 && dy === 0) return (x - x1) ** 2 + (y - y1) ** 2;
+    let t = ((x - x1) * dx + (y - y1) * dy) / (dx * dx + dy * dy);
+    t = Math.max(0, Math.min(1, t));
+    const px = x1 + t * dx;
+    const py = y1 + t * dy;
+    return (x - px) ** 2 + (y - py) ** 2;
+  };
+  const keep = new Array(points.length).fill(false);
+  keep[0] = keep[points.length - 1] = true;
+  const stack: [number, number][] = [[0, points.length - 1]];
+  const epsSq = eps * eps;
+  while (stack.length) {
+    const [s, e] = stack.pop()!;
+    let dmax = 0;
+    let idx = -1;
+    for (let i = s + 1; i < e; i++) {
+      const d = distSq(points[i], points[s], points[e]);
+      if (d > dmax) {
+        dmax = d;
+        idx = i;
+      }
+    }
+    if (dmax > epsSq && idx !== -1) {
+      keep[idx] = true;
+      stack.push([s, idx], [idx, e]);
+    }
+  }
+  return points.filter((_, i) => keep[i]);
+}
+
+/** GeoJSON FeatureCollection of simplified county outlines. */
+function countiesFeatureCollection(counties: County[]): unknown {
+  const features = counties.map((c) => {
+    const rings = c.rings.map((r) => rdp(r, 0.0009));
+    const geometry =
+      rings.length === 1
+        ? { type: "Polygon", coordinates: [rings[0]] }
+        : { type: "MultiPolygon", coordinates: rings.map((r) => [r]) };
+    return { type: "Feature", properties: { name: c.name }, geometry };
+  });
+  return { type: "FeatureCollection", features };
 }
 
 // ---------------------------------------------------------------------------
@@ -322,6 +546,9 @@ function normalize(
     entertainment: [],
   };
   const seen = new Set<string>();
+  // Only group under names that exist in our town list, so the area hierarchy
+  // never hides an apartment under an unknown town.
+  const townNames = new Set(towns.map((t) => t.name));
 
   // Order matters only for dedup precedence; all elements run through classify.
   const all = [
@@ -347,7 +574,11 @@ function normalize(
     const { category, subcategory } = classified;
     const name = deriveName(tags, category);
     const address = composeAddress(tags);
-    const town = tags["addr:city"] ?? nearestTown(coords.lat, coords.lng, towns);
+    const addrCity = tags["addr:city"];
+    const town =
+      addrCity && townNames.has(addrCity)
+        ? addrCity
+        : nearestTown(coords.lat, coords.lng, towns);
     const keptTags = pickTags(tags);
 
     const base: Place = {
@@ -384,6 +615,131 @@ function normalize(
     }
   }
 
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Merge apartment buildings into complexes
+// ---------------------------------------------------------------------------
+
+/**
+ * OSM tags each building of a complex separately, so a single apartment complex
+ * becomes a dozen dots. Union-find buildings within `thresholdM` of each other
+ * (transitively) into one representative point per complex.
+ */
+function mergeApartmentComplexes(apts: Apartment[], thresholdM = 80): Apartment[] {
+  const n = apts.length;
+  const parent = Array.from({ length: n }, (_, i) => i);
+  const find = (x: number): number => {
+    while (parent[x] !== x) {
+      parent[x] = parent[parent[x]];
+      x = parent[x];
+    }
+    return x;
+  };
+  const union = (a: number, b: number): void => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent[ra] = rb;
+  };
+
+  const isGenericName = (name: string) =>
+    !name || name === "Unnamed" || /^Apartment Building/.test(name);
+  // Two buildings may merge only if at least one is generic, or they share a
+  // name — so distinct named complexes that sit close stay separate.
+  const mergeable = (a: Apartment, b: Apartment) =>
+    isGenericName(a.name) || isGenericName(b.name) || a.name === b.name;
+
+  // Spatial grid (~thresholdM cells) so we only compare nearby buildings.
+  const cell = thresholdM / 111_000; // degrees latitude per metre, approx
+  const cx = (lng: number) => Math.floor(lng / cell);
+  const cy = (lat: number) => Math.floor(lat / cell);
+  const grid = new Map<string, number[]>();
+  apts.forEach((a, i) => {
+    const k = `${cx(a.lng)},${cy(a.lat)}`;
+    const bucket = grid.get(k);
+    if (bucket) bucket.push(i);
+    else grid.set(k, [i]);
+  });
+
+  apts.forEach((a, i) => {
+    const gx = cx(a.lng);
+    const gy = cy(a.lat);
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const arr = grid.get(`${gx + dx},${gy + dy}`);
+        if (!arr) continue;
+        for (const j of arr) {
+          if (j <= i) continue;
+          const b = apts[j];
+          if (
+            haversineKm(a.lat, a.lng, b.lat, b.lng) * 1000 <= thresholdM &&
+            mergeable(a, b)
+          ) {
+            union(i, j);
+          }
+        }
+      }
+    }
+  });
+
+  const groups = new Map<number, number[]>();
+  for (let i = 0; i < n; i++) {
+    const r = find(i);
+    const g = groups.get(r);
+    if (g) g.push(i);
+    else groups.set(r, [i]);
+  }
+
+  const isGeneric = (name: string) =>
+    !name || name === "Unnamed" || /^Apartment Building/.test(name);
+
+  const result: Apartment[] = [];
+  for (const idxs of groups.values()) {
+    const members = idxs.map((i) => apts[i]);
+    const rep = members.find((m) => !isGeneric(m.name)) ?? members[0];
+    const lat = members.reduce((s, m) => s + m.lat, 0) / members.length;
+    const lng = members.reduce((s, m) => s + m.lng, 0) / members.length;
+
+    // Most common town among members.
+    const townTally = new Map<string, number>();
+    for (const m of members) {
+      if (m.town) townTally.set(m.town, (townTally.get(m.town) ?? 0) + 1);
+    }
+    let town = rep.town;
+    let best = 0;
+    for (const [t, c] of townTally) {
+      if (c > best) {
+        best = c;
+        town = t;
+      }
+    }
+
+    // Keep the richest tag bag (most keys) among members.
+    let tags = rep.tags;
+    let mostKeys = tags ? Object.keys(tags).length : 0;
+    for (const m of members) {
+      const k = m.tags ? Object.keys(m.tags).length : 0;
+      if (k > mostKeys) {
+        mostKeys = k;
+        tags = m.tags;
+      }
+    }
+
+    const address = rep.address;
+    result.push({
+      id: rep.id,
+      name: rep.name,
+      category: "apartments",
+      subcategory: rep.subcategory,
+      lat: +lat.toFixed(6),
+      lng: +lng.toFixed(6),
+      ...(town ? { town } : {}),
+      ...(address ? { address } : {}),
+      ...(tags ? { tags } : {}),
+      links: buildApartmentLinks({ name: rep.name, lat, lng, town, address }),
+    });
+  }
   return result;
 }
 
@@ -451,10 +807,24 @@ async function main() {
   await sleep(POLITE_DELAY_MS);
 
   const entertainmentRaw = await runOverpass("entertainment", QUERIES.entertainment);
+  await sleep(POLITE_DELAY_MS);
+
+  const fortMeadeRaw = await runOverpass("fortMeade", QUERIES.fortMeade);
+  await sleep(POLITE_DELAY_MS);
+
+  const countiesRaw = await runOverpass("counties", QUERIES.counties);
 
   // 2. Normalize.
   console.log("\nNormalizing…");
+  const counties = buildCounties(countiesRaw);
   const towns = buildTowns(townsRaw);
+  for (const t of towns) {
+    const county = countyOf(t.lat, t.lng, counties);
+    if (county) t.county = county;
+  }
+  console.log(
+    `  counties: ${counties.length} (${counties.map((c) => c.name).join(", ")})`,
+  );
   const places = normalize(
     {
       apartments: apartmentsRaw,
@@ -465,6 +835,30 @@ async function main() {
     towns,
   );
 
+  // 2b. Merge per-building apartment dots into one point per complex.
+  const rawApartments = places.apartments.length;
+  places.apartments = mergeApartmentComplexes(places.apartments);
+  console.log(
+    `  merged apartments: ${rawApartments} buildings -> ${places.apartments.length} complexes`,
+  );
+
+  // 2c. Hand-added complexes OSM doesn't tag as apartments.
+  for (const x of EXTRA_APARTMENTS) {
+    const town = nearestTown(x.lat, x.lng, towns);
+    places.apartments.push({
+      id: `manual/${x.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+      name: x.name,
+      category: "apartments",
+      subcategory: x.subcategory ?? "apartments",
+      lat: x.lat,
+      lng: x.lng,
+      ...(town ? { town } : {}),
+      tags: { source: "manual" },
+      links: buildApartmentLinks({ name: x.name, lat: x.lat, lng: x.lng, town }),
+    });
+  }
+  console.log(`  + ${EXTRA_APARTMENTS.length} hand-added complexes`);
+
   // 3. Write output.
   console.log("\nWriting JSON…");
   await writeJson("towns.json", towns);
@@ -472,6 +866,17 @@ async function main() {
   await writeJson("food.json", fc(places.food.map(toFeature)));
   await writeJson("shopping.json", fc(places.shopping.map(toFeature)));
   await writeJson("entertainment.json", fc(places.entertainment.map(toFeature)));
+
+  const fortMeade = buildFortMeade(fortMeadeRaw);
+  if (fortMeade) {
+    await writeJson("fort-meade.json", fortMeade);
+  } else {
+    console.warn("  !! Fort Meade boundary not found — skipping fort-meade.json");
+  }
+
+  if (counties.length) {
+    await writeJson("counties.json", countiesFeatureCollection(counties));
+  }
 
   const counts = buildCounts(places);
   const categoriesPayload: CategoriesPayload = {
