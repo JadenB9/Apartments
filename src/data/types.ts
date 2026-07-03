@@ -50,6 +50,8 @@ export interface CategoriesPayload {
   categories: CategoryDef[];
   counts: Record<string, number>; // keyed by `${categoryId}:${subcategoryId}` and `${categoryId}`
   generatedAt: string;
+  // "openstreetmap" = full dataset from Overpass; "sample" = offline seed.
+  source?: "openstreetmap" | "sample";
 }
 
 // GeoJSON helpers (what we actually feed MapLibre sources).

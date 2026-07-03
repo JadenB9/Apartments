@@ -80,6 +80,8 @@ const APT_PATTERNS = [
   "{t} Town Center Apartments",
   "Verde at {t}",
   "{t} Overlook",
+  "{t} Condominiums",
+  "The Courts of {t} Condos",
 ];
 const STREETS = ["Main St", "Washington Blvd", "Cedar Ln", "Oak Ridge Rd", "Patuxent Pkwy", "Snowden River Pkwy", "Brock Bridge Rd", "Ridge Rd", "Maple Ave", "Old Annapolis Rd"];
 
@@ -160,7 +162,8 @@ function main() {
       const lat = jitter(t.lat, 0.02);
       const lng = jitter(t.lng, 0.024);
       const street = `${100 + Math.floor(rand() * 8900)} ${pick(STREETS)}`;
-      const levels = String(3 + Math.floor(rand() * 6));
+      const levels = 3 + Math.floor(rand() * 6);
+      const units = String(levels * (8 + Math.floor(rand() * 20)));
       const apt: Apartment = {
         id: `seed/apt/${aptId++}`,
         name,
@@ -170,7 +173,12 @@ function main() {
         lng,
         town: t.name,
         address: `${street}, ${t.name}, MD`,
-        tags: { "building:levels": levels, "addr:street": street, seed: "true" },
+        tags: {
+          "building:levels": String(levels),
+          units,
+          "addr:street": street,
+          seed: "true",
+        },
         links: buildApartmentLinks({ name, lat, lng, town: t.name, address: street }),
       };
       apartments.push(feat(apt));
@@ -230,6 +238,7 @@ function main() {
     categories: CATEGORIES,
     counts,
     generatedAt: new Date().toISOString(),
+    source: "sample",
   };
 
   const fc = (features: PlaceFeature[]): FeatureCollection => ({ type: "FeatureCollection", features });

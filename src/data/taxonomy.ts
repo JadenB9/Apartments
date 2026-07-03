@@ -166,21 +166,32 @@ function classifyEntertainment(tags: Record<string, string>): Classified | null 
     if (leisure === "park" || leisure === "nature_reserve" || leisure === "garden") {
       return { category: "entertainment", subcategory: "parks" };
     }
-    if (leisure === "fitness_centre" || leisure === "sports_centre" || leisure === "fitness_station") {
+    if (leisure === "fitness_centre" || leisure === "sports_centre") {
       return { category: "entertainment", subcategory: "fitness" };
     }
     if (
       leisure === "bowling_alley" ||
       leisure === "stadium" ||
-      leisure === "pitch" ||
       leisure === "golf_course" ||
+      leisure === "miniature_golf" ||
       leisure === "ice_rink" ||
-      leisure === "swimming_pool" ||
-      leisure === "water_park"
+      leisure === "water_park" ||
+      leisure === "horse_riding"
     ) {
       return { category: "entertainment", subcategory: "sports" };
     }
-    return { category: "entertainment", subcategory: "other_fun" };
+    if (
+      leisure === "amusement_arcade" ||
+      leisure === "escape_game" ||
+      leisure === "trampoline_park" ||
+      leisure === "dance" ||
+      leisure === "marina"
+    ) {
+      return { category: "entertainment", subcategory: "other_fun" };
+    }
+    // Everything else under leisure= (playgrounds, picnic tables, individual
+    // sports pitches, private pools, …) is map noise, not a destination.
+    return null;
   }
   if (tourism) {
     if (tourism === "museum" || tourism === "gallery" || tourism === "artwork") {
@@ -195,23 +206,26 @@ function classifyEntertainment(tags: Record<string, string>): Classified | null 
 
 function classifyApartment(tags: Record<string, string>): Classified | null {
   const building = tags.building;
+  // A named condo building/complex is its own subcategory regardless of the
+  // underlying building tag.
+  const isCondoName = /\bcondo(minium)?s?\b/i.test(tags.name ?? "");
   if (building === "apartments") {
-    return { category: "apartments", subcategory: "apartments" };
+    return { category: "apartments", subcategory: isCondoName ? "condo" : "apartments" };
   }
   if (building === "residential" && tags.residential === "apartments") {
-    return { category: "apartments", subcategory: "apartments" };
+    return { category: "apartments", subcategory: isCondoName ? "condo" : "apartments" };
   }
   if (tags["building:use"] === "apartments") {
-    return { category: "apartments", subcategory: "apartments" };
+    return { category: "apartments", subcategory: isCondoName ? "condo" : "apartments" };
   }
   if (building === "residential") {
-    return { category: "apartments", subcategory: "residential" };
+    return { category: "apartments", subcategory: isCondoName ? "condo" : "residential" };
   }
   if (building === "dormitory" || tags.residential === "university") {
     return { category: "apartments", subcategory: "residential" };
   }
   if (tags.building === "yes" && /apartment|condo|residence|towers?|lofts?/i.test(tags.name ?? "")) {
-    return { category: "apartments", subcategory: /condo/i.test(tags.name ?? "") ? "condo" : "apartments" };
+    return { category: "apartments", subcategory: isCondoName ? "condo" : "apartments" };
   }
   return null;
 }

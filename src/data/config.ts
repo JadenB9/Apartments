@@ -23,35 +23,3 @@ export const MAP_CENTER: [number, number] = [
 ];
 
 export const INITIAL_ZOOM = 10.5;
-
-// Town centroids in scope (used as fallbacks / for the towns panel zoom).
-// The authoritative list is generated into public/data/towns.json by the
-// fetch script; this is a curated seed of the corridor's notable places.
-export const CORRIDOR_TOWNS = [
-  "Columbia",
-  "Ellicott City",
-  "Elkridge",
-  "Laurel",
-  "Jessup",
-  "Savage",
-  "Hanover",
-  "Odenton",
-  "Severn",
-  "Fort Meade",
-  "Annapolis Junction",
-  "Maple Lawn",
-  "Fulton",
-  "Clarksville",
-  "Beltsville",
-  "Greenbelt",
-  "College Park",
-  "Hyattsville",
-  "Glen Burnie",
-  "Arbutus",
-  "Catonsville",
-  "Bowie",
-  "Crofton",
-  "Annapolis",
-  "Linthicum",
-  "Burtonsville",
-] as const;

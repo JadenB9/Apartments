@@ -3,7 +3,10 @@ import preact from "@preact/preset-vite";
 import { compression } from "vite-plugin-compression2";
 
 // Fast static SPA: Preact + pre-compressed assets (gzip + brotli).
+// GITHUB_PAGES is set by the deploy workflow so assets resolve under the
+// repository subpath (jadenb9.github.io/Apartments/).
 export default defineConfig({
+  base: process.env.GITHUB_PAGES ? "/Apartments/" : "/",
   plugins: [
     preact(),
     compression({ algorithm: "gzip", exclude: [/\.(br)$/, /\.(gz)$/] }),

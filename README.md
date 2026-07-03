@@ -1,4 +1,4 @@
-# BW Corridor Map 🗺️
+# Corridor & Co. 🗺️
 
 A fast, lightweight web app mapping **the Baltimore–Washington corridor** — the
 area *between* Baltimore City and Washington, DC (Columbia, Laurel, Jessup,
@@ -6,16 +6,19 @@ Odenton, Hanover, Glen Burnie, Bowie, Annapolis, and ~20 more towns).
 
 It plots **every apartment building** as a clickable tile (each links out to
 Google Maps, Apartments.com, and Zillow), plus **food, shopping, and
-entertainment**, broken down into categories and subcategories you can toggle on
-the map.
+entertainment**, broken into subcategories you can toggle on the map.
 
-## Stack (built for speed)
+## Features
 
-- **Bun** + **Vite** + **TypeScript** + **Preact** (~15 kB gzipped app bundle)
-- **MapLibre GL JS** with native marker **clustering** (handles thousands of points)
-- **@preact/signals** for zero-boilerplate shared state
-- **Pre-baked static JSON** — the running app makes **zero external data API
-  calls**, so it loads instantly. Assets are pre-compressed (gzip + brotli).
+- **Clustered map layers** per category; cluster counts always reflect the
+  active filters and search (sources are re-filtered, not just hidden)
+- **Category tree** — Apartments (incl. condos), Food → cuisines, Shopping →
+  store types, Entertainment → venue types — with live counts
+- **Search** narrows the map, the tile grid, and the towns list together
+- **Light & dark themes** — follows your system, toggle in the header, persisted
+- **Shareable deep links** — the viewport and active filters live in the URL
+- **Keyless vector basemap** (OpenFreeMap) with an automatic raster fallback
+- Loading skeletons, error states with retry, keyboard-accessible controls
 
 ## Quick start
 
@@ -24,72 +27,85 @@ bun install
 bun run dev        # http://localhost:5173
 ```
 
-Production build:
+Other commands:
 
 ```bash
-bun run build      # -> dist/ (static, deploy anywhere)
-bun run preview
+bun run check      # typecheck (app + scripts) and run all tests
+bun test           # tests only
+bun run build      # production build -> dist/ (static, deploy anywhere)
+bun run preview    # serve the production build locally
 ```
 
-## Where the data comes from
+## Data
 
-All places are sourced from **OpenStreetMap** via the **Overpass API** and baked
-into `public/data/*.json` at build time:
+All places come from **OpenStreetMap** via the **Overpass API**, pre-baked into
+`public/data/*.json` — the running app makes **zero external data API calls**:
 
-- `apartments.json` — every `building=apartments` (+ residential/condo) building,
-  each with `links` to Google Maps / Apartments.com / Zillow.
-- `food.json`, `shopping.json`, `entertainment.json` — POIs classified into
-  subcategories (cuisine types, grocery/mall/clothing, cinema/parks/fitness, …).
-- `towns.json` — every town/village/suburb in the corridor.
-- `categories.json` — the taxonomy + live counts.
+- `apartments.json` — every apartment/condo building, each with outbound
+  `links` (Google Maps / Apartments.com / Zillow)
+- `food.json` / `shopping.json` / `entertainment.json` — categorized POIs
+- `towns.json` — every town, village, and suburb in the corridor
+- `categories.json` — the taxonomy, live counts, generation time, and source
 
-### Refresh the full dataset
+### Automatic refresh (CI)
+
+`.github/workflows/refresh-data.yml` re-fetches the full dataset from Overpass
+**every Monday** and commits it if anything changed. GitHub-hosted runners can
+reach Overpass even when your dev environment can't.
+
+> Scheduled workflows run from the default branch — the schedule activates once
+> this code is merged to `main`. You can also trigger it manually from the
+> Actions tab.
+
+### Manual refresh
 
 ```bash
 bun run fetch-data   # queries Overpass, regenerates public/data/*.json
 ```
 
-> ⚠️ **`fetch-data` needs outbound access to `overpass-api.de`.** Some sandboxed
-> environments (including Claude Code on the web with a restrictive network
-> policy) **block Overpass by egress policy**, so the fetch fails there with a
-> `403 host not permitted`. Run it on a machine/network where Overpass is
-> reachable, or relax the environment's network policy. See
-> https://code.claude.com/docs/en/claude-code-on-the-web for network policies.
+Needs outbound access to `overpass-api.de`. Some sandboxed environments
+(including Claude Code on the web with a restrictive network policy) block it
+with a `403 host not permitted` — the script fails loudly and writes nothing.
+It also refuses to overwrite good data if Overpass returns a suspiciously
+small result.
 
-### Seed data (works offline)
+### Sample data
 
-So the app is usable without network, a **demonstrative seed dataset** ships in
-`public/data/` (real corridor towns + plausibly-named complexes/POIs at
-approximate coordinates, tagged `seed:"true"`). Regenerate it with:
+So the app works offline out of the box, a clearly-labeled sample dataset ships
+in `public/data/` (`"source": "sample"` — the header shows a notice). Regenerate
+it with `bun run seed-data`; any successful `fetch-data` run replaces it with
+the real OpenStreetMap dataset.
 
-```bash
-bun run seed-data
-```
+## Deployment (GitHub Pages)
 
-Running `bun run fetch-data` **replaces** the seed with the full, authoritative
-OpenStreetMap dataset.
+`.github/workflows/deploy.yml` builds and publishes to GitHub Pages on every
+push to `main`.
 
-## How it works
+One-time setup after merging: **Settings → Pages → Source → "GitHub Actions"**.
+The site then lives at `https://<user>.github.io/Apartments/`.
 
-- `src/data/taxonomy.ts` — single source of truth mapping OSM tags →
-  (category, subcategory). Used by both the data pipeline and the UI.
-- `src/data/loader.ts` — loads apartments/towns/counts eagerly; lazy-loads
-  food/shopping/entertainment GeoJSON the first time their layer is enabled.
-- `src/store.ts` — signals shared by the map and the panels (filters, search,
-  selection, viewport, map actions).
-- `src/map/MapView.tsx` — MapLibre map, clustered layers, apartment popups.
-- `src/components/` — `SearchBox`, `Sidebar` (category tree), `TownsPanel`,
-  `ApartmentTiles`.
+## Architecture
 
-### Basemap
+| Piece | Role |
+| --- | --- |
+| `src/data/taxonomy.ts` | Single source of truth: OSM tags → (category, subcategory), labels, colors |
+| `src/data/loader.ts` | Loads core data eagerly, other categories lazily; status signals + retry |
+| `src/store.ts` | Shared signals: filters, search, selection, viewport, theme, load status |
+| `src/urlState.ts` | Hash ↔ store sync for shareable links |
+| `src/map/MapView.tsx` | MapLibre map: clustered sources, `setData` filtering, popups, theme-aware basemap |
+| `src/components/` | Sidebar tree, apartment tiles, towns, search, icons |
+| `src/styles.css` | The whole design system: tokens + light/dark themes |
+| `scripts/fetch-data.ts` | Overpass pipeline (Bun) |
+| `scripts/seed-data.ts` | Offline sample dataset generator |
 
-Uses keyless CARTO dark raster tiles by default. For maximum speed/offline use,
-swap in a self-hosted **Protomaps `.pmtiles`** regional extract (see the comment
-at the top of `src/map/MapView.tsx`).
+Stack: **Bun · Vite · TypeScript · Preact · @preact/signals · MapLibre GL** —
+~15 kB gzipped app bundle, code-split MapLibre, brotli/gzip pre-compression,
+bundled fonts (Fraunces + Instrument Sans, no external font requests).
 
 ## Notes & limits
 
-- "Every apartment" = every building OpenStreetMap has tagged as apartments in
-  the corridor. OSM coverage is good but not 100%; `fetch-data` keeps it current.
-- **No live rent prices** — those sources block scraping (ToS). Tiles link out to
-  Google Maps / Apartments.com / Zillow where current listings & prices live.
+- "Every apartment" = every building OpenStreetMap has tagged as housing in the
+  corridor. Coverage is strong but not literally 100%; the weekly refresh keeps
+  it current.
+- **No live rent prices** — listing sites prohibit scraping. Tiles link out to
+  Google Maps / Apartments.com / Zillow where current listings live.

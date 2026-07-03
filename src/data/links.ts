@@ -14,7 +14,7 @@ function q(parts: (string | undefined)[]): string {
   return encodeURIComponent(parts.filter(Boolean).join(" "));
 }
 
-export function googleMapsLink({ name, lat, lng }: PlaceLinkInput): string {
+function googleMapsLink({ name, lat, lng }: PlaceLinkInput): string {
   // Prefer name+coords so the pin lands on the right place.
   const query = name
     ? `${encodeURIComponent(name)}@${lat},${lng}`
@@ -22,11 +22,11 @@ export function googleMapsLink({ name, lat, lng }: PlaceLinkInput): string {
   return `https://www.google.com/maps/search/?api=1&query=${query}`;
 }
 
-export function apartmentsComLink({ name, town, address }: PlaceLinkInput): string {
+function apartmentsComLink({ name, town, address }: PlaceLinkInput): string {
   return `https://www.apartments.com/search/?q=${q([name, address, town, "MD"])}`;
 }
 
-export function zillowLink({ name, town, address }: PlaceLinkInput): string {
+function zillowLink({ name, town, address }: PlaceLinkInput): string {
   return `https://www.zillow.com/homes/${q([name, address, town, "MD"])}_rb/`;
 }
 

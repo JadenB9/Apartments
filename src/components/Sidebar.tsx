@@ -1,43 +1,47 @@
 import { useState } from "preact/hooks";
 import { CATEGORIES } from "../data/taxonomy";
 import { loadCategory } from "../data/loader";
-import type { CategoryId } from "../data/types";
+import type { CategoryId, SubcategoryDef } from "../data/types";
 import {
   activeFilters,
   categoriesMeta,
+  categoryStatus,
   isSubActive,
   toggleCategory,
   toggleSub,
 } from "../store";
+import { CATEGORY_ICONS, CheckIcon, ChevronIcon, MinusIcon } from "./icons";
 
-// Category tree. Each category is a collapsible section with a master checkbox,
-// a count badge, a color swatch, and per-subcategory rows. Toggling a
-// non-apartments category/sub ON kicks off lazy data loading for the map.
+// Category tree: collapsible sections with a master checkbox, count badge,
+// icon, and per-subcategory rows. Toggling a non-apartments category/sub ON
+// kicks off lazy data loading for the map.
 export function Sidebar() {
-  // Default: only "apartments" expanded.
   const [expanded, setExpanded] = useState<Record<string, boolean>>({
     apartments: true,
   });
 
-  // Read these signals so the component re-renders on filter/meta changes.
   const counts = categoriesMeta.value?.counts ?? {};
-  const filters = activeFilters.value; // subscribe to filter changes
+  const filters = activeFilters.value;
+  const statuses = categoryStatus.value;
 
   return (
-    <div class="sidebar-tree">
+    <div>
       {CATEGORIES.map((cat) => {
         const isOpen = !!expanded[cat.id];
         const subKeys = cat.subcategories.map((s) => `${cat.id}:${s.id}`);
         const activeCount = subKeys.filter((k) => filters.has(k)).length;
         const allActive = activeCount === subKeys.length && subKeys.length > 0;
         const someActive = activeCount > 0 && !allActive;
-        const catCount = counts[cat.id];
+        const Icon = CATEGORY_ICONS[cat.id];
+        const status = statuses[cat.id];
+
+        const flip = () => setExpanded((e) => ({ ...e, [cat.id]: !e[cat.id] }));
 
         const onMasterToggle = () => {
           const turningOn = !allActive;
           toggleCategory(cat.id, turningOn);
           if (turningOn && cat.id !== "apartments") {
-            void loadCategory(cat.id as CategoryId);
+            void loadCategory(cat.id);
           }
         };
 
@@ -47,148 +51,111 @@ export function Sidebar() {
               <button
                 class="cat-chevron"
                 type="button"
-                aria-label={isOpen ? "Collapse" : "Expand"}
-                onClick={() =>
-                  setExpanded((e) => ({ ...e, [cat.id]: !e[cat.id] }))
-                }
+                aria-label={isOpen ? `Collapse ${cat.label}` : `Expand ${cat.label}`}
+                aria-expanded={isOpen}
+                onClick={flip}
               >
-                <span class={isOpen ? "chev open" : "chev"}>▸</span>
+                <span class={isOpen ? "chev open" : "chev"}>
+                  <ChevronIcon />
+                </span>
               </button>
-              <span class="swatch" style={{ background: cat.color }} />
-              <button
-                class="cat-label"
-                type="button"
-                onClick={() =>
-                  setExpanded((e) => ({ ...e, [cat.id]: !e[cat.id] }))
-                }
-              >
+              <span class="cat-icon" style={{ background: cat.color }}>
+                <Icon />
+              </span>
+              <button class="cat-label" type="button" onClick={flip}>
                 {cat.label}
               </button>
-              {catCount != null ? (
-                <span class="chip">{catCount}</span>
-              ) : null}
-              <input
-                class={someActive ? "cat-check partial" : "cat-check"}
-                type="checkbox"
+              {counts[cat.id] != null ? <span class="chip">{counts[cat.id]}</span> : null}
+              <Checkbox
+                catColor={cat.color}
                 checked={allActive}
-                ref={(el) => {
-                  if (el) (el as HTMLInputElement).indeterminate = someActive;
-                }}
+                indeterminate={someActive}
+                label={`Toggle all ${cat.label}`}
                 onChange={onMasterToggle}
-                aria-label={`Toggle all ${cat.label}`}
               />
             </div>
 
             {isOpen ? (
               <div class="cat-body">
-                {cat.subcategories.map((sub) => {
-                  const active = isSubActive(cat.id, sub.id);
-                  const subCount = counts[`${cat.id}:${sub.id}`];
-                  return (
-                    <label class="sub-row" key={sub.id}>
-                      <input
-                        type="checkbox"
-                        checked={active}
-                        onChange={() => {
-                          toggleSub(cat.id, sub.id);
-                          // toggleSub flips state; if it just turned ON, load data.
-                          if (
-                            !active &&
-                            cat.id !== "apartments"
-                          ) {
-                            void loadCategory(cat.id as CategoryId);
-                          }
-                        }}
-                      />
-                      <span class="sub-label">{sub.label}</span>
-                      <span class="chip chip-sm">{subCount ?? 0}</span>
-                    </label>
-                  );
-                })}
+                {status === "error" ? (
+                  <div class="error-banner" role="alert">
+                    Couldn’t load {cat.label} data.
+                    <button type="button" onClick={() => void loadCategory(cat.id)}>
+                      Retry
+                    </button>
+                  </div>
+                ) : null}
+                {status === "loading" ? (
+                  <div class="state-note">Loading {cat.label.toLowerCase()}…</div>
+                ) : null}
+                {cat.subcategories.map((sub) => (
+                  <SubRow key={sub.id} catId={cat.id} sub={sub} counts={counts} />
+                ))}
               </div>
             ) : null}
           </section>
         );
       })}
-      <style>{styles}</style>
     </div>
   );
 }
 
-const styles = `
-.sidebar-tree {
-  flex: 1 1 auto;
-  overflow-y: auto;
-  padding: 6px 0;
+function SubRow({
+  catId,
+  sub,
+  counts,
+}: {
+  catId: CategoryId;
+  sub: SubcategoryDef;
+  counts: Record<string, number>;
+}) {
+  const active = isSubActive(catId, sub.id);
+  return (
+    <label class="sub-row">
+      <Checkbox
+        checked={active}
+        label={sub.label}
+        onChange={() => {
+          toggleSub(catId, sub.id);
+          // If this just turned the sub ON, make sure the data is loading.
+          if (!active && catId !== "apartments") void loadCategory(catId);
+        }}
+      />
+      <span class="sub-label">{sub.label}</span>
+      <span class="chip">{counts[`${catId}:${sub.id}`] ?? 0}</span>
+    </label>
+  );
 }
-.cat { border-bottom: 1px solid var(--border); }
-.cat-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
+
+// Custom checkbox: real <input> for a11y, styled box with SVG check/dash marks.
+function Checkbox({
+  checked,
+  indeterminate = false,
+  label,
+  onChange,
+  catColor,
+}: {
+  checked: boolean;
+  indeterminate?: boolean;
+  label: string;
+  onChange: () => void;
+  catColor?: string;
+}) {
+  return (
+    <span
+      class={catColor ? "check check-cat" : "check"}
+      style={catColor ? { "--cat-color": catColor } : undefined}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        aria-label={label}
+        ref={(el) => {
+          if (el) el.indeterminate = indeterminate;
+        }}
+        onChange={onChange}
+      />
+      <span class="check-box">{indeterminate ? <MinusIcon /> : <CheckIcon />}</span>
+    </span>
+  );
 }
-.cat-header:hover { background: var(--panel-2); }
-.cat-chevron {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  background: transparent;
-  border: none;
-  color: var(--muted);
-}
-.chev {
-  display: inline-block;
-  font-size: 11px;
-  transition: transform 0.12s ease;
-}
-.chev.open { transform: rotate(90deg); }
-.swatch {
-  flex: 0 0 auto;
-  width: 12px;
-  height: 12px;
-  border-radius: 3px;
-}
-.cat-label {
-  flex: 1 1 auto;
-  text-align: left;
-  padding: 0;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
-  background: transparent;
-  border: none;
-}
-.chip {
-  flex: 0 0 auto;
-  min-width: 22px;
-  padding: 1px 6px;
-  font-size: 11px;
-  text-align: center;
-  color: var(--muted);
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-}
-.chip-sm { min-width: 18px; font-size: 10px; padding: 0 5px; }
-.cat-check { flex: 0 0 auto; accent-color: var(--accent); cursor: pointer; }
-.cat-body { padding: 2px 0 6px 0; }
-.sub-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 10px 5px 34px;
-  cursor: pointer;
-}
-.sub-row:hover { background: var(--panel-2); }
-.sub-row input { accent-color: var(--accent); cursor: pointer; }
-.sub-label {
-  flex: 1 1 auto;
-  font-size: 12.5px;
-  color: var(--text);
-}
-`;

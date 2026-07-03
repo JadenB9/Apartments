@@ -32,6 +32,7 @@ import type {
   FeatureCollection,
   Place,
   PlaceFeature,
+  PlaceProperties,
   Town,
 } from "../src/data/types";
 
@@ -53,6 +54,7 @@ const BBOX_LITERAL = `${BBOX.south},${BBOX.west},${BBOX.north},${BBOX.east}`;
 const KEPT_TAG_KEYS = [
   "cuisine",
   "website",
+  "contact:website",
   "phone",
   "opening_hours",
   "building:levels",
@@ -213,6 +215,8 @@ function pickTags(tags: Record<string, string>): Record<string, string> | undefi
   for (const k of KEPT_TAG_KEYS) {
     if (tags[k]) out[k] = tags[k];
   }
+  // OSM models apartment unit counts as building:flats; the UI reads `units`.
+  if (tags["building:flats"]) out.units = tags["building:flats"];
   return Object.keys(out).length ? out : undefined;
 }
 
@@ -258,7 +262,7 @@ function nearestTown(lat: number, lng: number, towns: Town[]): string | undefine
 }
 
 /** Build a GeoJSON Point feature from a Place/Apartment. */
-function toFeature(place: Place & Partial<Apartment>): PlaceFeature {
+function toFeature(place: PlaceProperties): PlaceFeature {
   return {
     type: "Feature",
     geometry: { type: "Point", coordinates: [place.lng, place.lat] },
@@ -465,7 +469,25 @@ async function main() {
     towns,
   );
 
-  // 3. Write output.
+  // 3. Sanity checks BEFORE writing — never clobber a good dataset with a
+  //    suspicious partial one.
+  const problems: string[] = [];
+  if (places.apartments.length < 50) {
+    problems.push(
+      `only ${places.apartments.length} apartment buildings — expected hundreds-to-thousands; ` +
+        `the query may be wrong or Overpass returned a partial result`,
+    );
+  }
+  if (towns.length === 0) {
+    problems.push("zero towns — towns query returned nothing");
+  }
+  if (problems.length > 0) {
+    console.error("\n=== SANITY CHECK FAILED — NOTHING WRITTEN ===");
+    for (const p of problems) console.error(`  !! ${p}`);
+    process.exit(1);
+  }
+
+  // 4. Write output.
   console.log("\nWriting JSON…");
   await writeJson("towns.json", towns);
   await writeJson("apartments.json", fc(places.apartments.map(toFeature)));
@@ -478,10 +500,11 @@ async function main() {
     categories: CATEGORIES,
     counts,
     generatedAt: new Date().toISOString(),
+    source: "openstreetmap",
   };
   await writeJson("categories.json", categoriesPayload);
 
-  // 4. Summary + sanity checks.
+  // 5. Summary.
   console.log("\n=== Summary ===");
   console.log(`towns:         ${towns.length}`);
   console.log(`apartments:    ${places.apartments.length}`);
@@ -491,18 +514,6 @@ async function main() {
   console.log("\nPer-subcategory counts:");
   for (const [k, v] of Object.entries(counts).sort()) {
     if (k.includes(":")) console.log(`  ${k}: ${v}`);
-  }
-
-  if (places.apartments.length < 50) {
-    console.error(
-      `\n!! WARNING: only ${places.apartments.length} apartment buildings — expected hundreds-to-thousands. ` +
-        `The corridor should yield far more; the query may be wrong or Overpass returned a partial result.`,
-    );
-    process.exitCode = 1;
-  }
-  if (towns.length === 0) {
-    console.error("\n!! WARNING: zero towns — towns query returned nothing.");
-    process.exitCode = 1;
   }
 
   console.log("\nDone.");

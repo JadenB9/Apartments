@@ -1,24 +1,16 @@
-import { useEffect } from "preact/hooks";
 import { MapView } from "./map/MapView";
 import { SearchBox } from "./components/SearchBox";
 import { Sidebar } from "./components/Sidebar";
 import { TownsPanel } from "./components/TownsPanel";
 import { ApartmentTiles } from "./components/ApartmentTiles";
+import { MoonIcon, SunIcon } from "./components/icons";
+import { categoriesMeta, setTheme, theme } from "./store";
 
 export function App() {
-  // Lock mobile address-bar resize jank; nothing else needed — data loads
-  // lazily from inside MapView (loadCore) and the panels react via signals.
-  useEffect(() => {
-    document.title = "BW Corridor Map — Apartments & Places";
-  }, []);
-
   return (
     <>
       <aside class="panel-col">
-        <header class="app-head">
-          <h1>BW&nbsp;Corridor</h1>
-          <p>Apartments, food, shopping &amp; entertainment between Baltimore and DC.</p>
-        </header>
+        <Header />
         <SearchBox />
         <div class="panel-scroll">
           <Sidebar />
@@ -29,30 +21,52 @@ export function App() {
       <main class="map-col">
         <MapView />
       </main>
-      <style>{css}</style>
     </>
   );
 }
 
-const css = `
-.panel-col {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  background: var(--panel);
-  border-right: 1px solid var(--border);
-  min-height: 0;
-}
-.app-head { padding: 14px 16px 10px; border-bottom: 1px solid var(--border); }
-.app-head h1 { margin: 0; font-size: 18px; letter-spacing: .2px; }
-.app-head p { margin: 4px 0 0; font-size: 12px; color: var(--muted); line-height: 1.35; }
-.panel-scroll { flex: 1; overflow-y: auto; min-height: 0; }
-.map-col { position: relative; height: 100%; min-width: 0; }
-.map-col > * { position: absolute; inset: 0; }
+function Header() {
+  const mode = theme.value;
+  const meta = categoriesMeta.value;
+  const isSample = meta?.source === "sample";
 
-@media (max-width: 760px) {
-  #app { grid-template-rows: 45vh 55vh; grid-template-columns: 1fr; }
-  .panel-col { order: 2; border-right: none; border-top: 1px solid var(--border); }
-  .map-col { order: 1; }
+  let stamp: string | null = null;
+  if (meta) {
+    const when = new Date(meta.generatedAt);
+    const date = isNaN(when.getTime())
+      ? null
+      : when.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+    stamp = isSample
+      ? "Sample data — run the fetch script for the full OpenStreetMap set"
+      : `OpenStreetMap data${date ? ` · updated ${date}` : ""}`;
+  }
+
+  return (
+    <header class="app-head">
+      <div class="app-head-text">
+        <h1 class="wordmark">
+          Corridor <span class="wordmark-amp">&amp;</span> Co.
+        </h1>
+        <p class="tagline">
+          Apartments, food, shopping &amp; entertainment between Baltimore and
+          Washington.
+        </p>
+        {stamp ? (
+          <p class={isSample ? "data-stamp sample" : "data-stamp"}>
+            <span class="stamp-dot" />
+            {stamp}
+          </p>
+        ) : null}
+      </div>
+      <button
+        class="theme-toggle"
+        type="button"
+        title={mode === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+        aria-label={mode === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+        onClick={() => setTheme(mode === "dark" ? "light" : "dark")}
+      >
+        {mode === "dark" ? <SunIcon /> : <MoonIcon />}
+      </button>
+    </header>
+  );
 }
-`;

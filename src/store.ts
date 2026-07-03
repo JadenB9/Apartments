@@ -7,10 +7,56 @@ import type {
   CategoriesPayload,
   CategoryId,
   FeatureCollection,
-  PlaceFeature,
   Town,
 } from "./data/types";
 import { CATEGORIES } from "./data/taxonomy";
+
+// ---- Theme ----
+export type Theme = "light" | "dark";
+
+const THEME_KEY = "bwc-theme";
+
+function initialTheme(): Theme {
+  try {
+    const stored = localStorage.getItem(THEME_KEY);
+    if (stored === "light" || stored === "dark") return stored;
+  } catch {
+    /* storage unavailable (private mode, tests) — fall through */
+  }
+  if (typeof matchMedia === "function") {
+    return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  return "dark";
+}
+
+export const theme = signal<Theme>(initialTheme());
+
+export function setTheme(next: Theme): void {
+  theme.value = next;
+  document.documentElement.dataset.theme = next;
+  try {
+    localStorage.setItem(THEME_KEY, next);
+  } catch {
+    /* non-fatal */
+  }
+}
+
+// ---- Data-loading status ----
+export type LoadStatus = "idle" | "loading" | "ready" | "error";
+
+// Core = towns + apartments + taxonomy counts (needed for first paint).
+export const coreStatus = signal<LoadStatus>("idle");
+// Per-category status for the lazily loaded layers.
+export const categoryStatus = signal<Record<CategoryId, LoadStatus>>({
+  apartments: "idle",
+  food: "idle",
+  shopping: "idle",
+  entertainment: "idle",
+});
+
+export function setCategoryStatus(cat: CategoryId, status: LoadStatus): void {
+  categoryStatus.value = { ...categoryStatus.value, [cat]: status };
+}
 
 // ---- Loaded data ----
 export const categoriesMeta = signal<CategoriesPayload | null>(null);
@@ -38,6 +84,9 @@ export const selectedPlaceId = signal<string | null>(null);
 // Current map viewport bounds [w,s,e,n] — kept in sync by the map so the tile
 // panel can show only what's visible.
 export const viewportBounds = signal<[number, number, number, number] | null>(null);
+
+// Current camera (center + zoom) — kept in sync by the map for URL deep links.
+export const viewport = signal<{ lng: number; lat: number; zoom: number } | null>(null);
 
 // ---- Actions wired by the map at mount ----
 export interface MapActions {
@@ -69,9 +118,9 @@ export function toggleSub(category: CategoryId, sub: string): void {
 }
 
 export function toggleCategory(category: CategoryId, on: boolean): void {
-  const next = new Set(activeFilters.value);
   const def = CATEGORIES.find((c) => c.id === category);
-  if (!def) return;
+  if (!def || def.subcategories.length === 0) return;
+  const next = new Set(activeFilters.value);
   for (const sub of def.subcategories) {
     const key = `${category}:${sub.id}`;
     if (on) next.add(key);
@@ -80,24 +129,34 @@ export function toggleCategory(category: CategoryId, on: boolean): void {
   activeFilters.value = next;
 }
 
-// Filtered apartment list for the tiles panel (search + viewport aware).
+// Does a place's name/town match the current search query?
+export function matchesSearch(
+  name: string | undefined,
+  town: string | undefined,
+  q: string,
+): boolean {
+  if (!q) return true;
+  const needle = q.toLowerCase();
+  return (
+    (name ?? "").toLowerCase().includes(needle) ||
+    (town ?? "").toLowerCase().includes(needle)
+  );
+}
+
+// Filtered apartment list for the tiles panel (search + subcategory + viewport
+// aware), sorted by name so the render cap keeps a deterministic, useful set.
 export const visibleApartments = computed<Apartment[]>(() => {
-  const q = searchQuery.value.trim().toLowerCase();
+  const q = searchQuery.value.trim();
   const bounds = viewportBounds.value;
-  return apartments.value.filter((a) => {
-    if (q && !a.name.toLowerCase().includes(q) && !(a.town ?? "").toLowerCase().includes(q)) {
-      return false;
-    }
+  const filters = activeFilters.value;
+  const out = apartments.value.filter((a) => {
+    if (!filters.has(`apartments:${a.subcategory}`)) return false;
+    if (!matchesSearch(a.name, a.town, q)) return false;
     if (bounds) {
       const [w, s, e, n] = bounds;
       if (a.lng < w || a.lng > e || a.lat < s || a.lat > n) return false;
     }
     return true;
   });
+  return out.sort((a, b) => a.name.localeCompare(b.name));
 });
-
-// Helper to know whether a feature passes the active subcategory filter.
-export function featurePassesFilter(f: PlaceFeature): boolean {
-  const p = f.properties;
-  return activeFilters.value.has(`${p.category}:${p.subcategory}`);
-}
