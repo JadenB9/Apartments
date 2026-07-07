@@ -4,7 +4,9 @@ import {
   coreStatus,
   mapActions,
   selectedPlaceId,
+  tileSort,
   visibleApartments,
+  type TileSort,
 } from "../store";
 
 const MAX_TILES = 300;
@@ -23,6 +25,17 @@ export function ApartmentTiles() {
     <section>
       <div class="section-head">
         <span style={{ flex: 1 }}>Apartments in view</span>
+        <select
+          class="sort-select"
+          aria-label="Sort apartments"
+          value={tileSort.value}
+          onChange={(e) => {
+            tileSort.value = e.currentTarget.value as TileSort;
+          }}
+        >
+          <option value="name">Name A–Z</option>
+          <option value="town">By town</option>
+        </select>
         <span class="chip">{status === "ready" ? all.length : "…"}</span>
       </div>
 

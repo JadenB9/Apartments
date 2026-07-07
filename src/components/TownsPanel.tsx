@@ -1,5 +1,12 @@
 import { useState } from "preact/hooks";
-import { coreStatus, mapActions, matchesSearch, searchQuery, towns } from "../store";
+import {
+  apartmentsPerTown,
+  coreStatus,
+  mapActions,
+  matchesSearch,
+  searchQuery,
+  towns,
+} from "../store";
 import { ChevronIcon } from "./icons";
 
 // Collapsible, alphabetically-sorted list of towns, narrowed by the shared
@@ -34,17 +41,22 @@ export function TownsPanel() {
           ) : list.length === 0 ? (
             <div class="state-note">No towns match “{q}”.</div>
           ) : (
-            list.map((t) => (
-              <button
-                class="town-row"
-                type="button"
-                key={`${t.name}:${t.lat}:${t.lng}`}
-                onClick={() => mapActions.value?.flyTo(t.lng, t.lat, 13)}
-              >
-                <span class="town-name">{t.name}</span>
-                <span class="town-type">{t.placeType}</span>
-              </button>
-            ))
+            list.map((t) => {
+              const aptCount = apartmentsPerTown.value.get(t.name) ?? 0;
+              return (
+                <button
+                  class="town-row"
+                  type="button"
+                  key={`${t.name}:${t.lat}:${t.lng}`}
+                  title={`${t.name} — ${aptCount} apartment${aptCount === 1 ? "" : "s"}`}
+                  onClick={() => mapActions.value?.flyTo(t.lng, t.lat, 13)}
+                >
+                  <span class="town-name">{t.name}</span>
+                  <span class="town-type">{t.placeType}</span>
+                  {aptCount > 0 ? <span class="chip">{aptCount}</span> : null}
+                </button>
+              );
+            })
           )}
         </div>
       ) : null}

@@ -668,6 +668,146 @@ button.section-head:hover { background: var(--panel-2); }
   pointer-events: none;
 }
 
+/* ---------- welcome / about overlay ---------- */
+
+.overlay-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-4);
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+.overlay-card {
+  max-width: 460px;
+  max-height: 86dvh;
+  overflow-y: auto;
+  padding: var(--sp-6) var(--sp-6) var(--sp-5);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+}
+.overlay-title {
+  margin: 0 0 var(--sp-2);
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 560;
+  font-variation-settings: "opsz" 40;
+  line-height: 1.15;
+}
+.overlay-lede {
+  margin: 0 0 var(--sp-4);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  color: var(--text);
+}
+.overlay-lede em { font-style: italic; color: var(--accent); }
+.overlay-points {
+  margin: 0 0 var(--sp-4);
+  padding: 0 0 0 var(--sp-4);
+  font-size: var(--fs-xs);
+  line-height: 1.55;
+  color: var(--text);
+}
+.overlay-points li { margin-bottom: var(--sp-2); }
+.overlay-note {
+  margin: 0 0 var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+}
+.overlay-note code {
+  font-size: 11px;
+  padding: 1px 4px;
+  background: var(--panel-2);
+  border-radius: 3px;
+}
+.overlay-fineprint {
+  margin: 0 0 var(--sp-4);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.overlay-close {
+  display: block;
+  width: 100%;
+  padding: 9px;
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius-md);
+  transition: filter 0.12s ease;
+}
+.overlay-close:hover { filter: brightness(1.08); }
+
+/* ---------- header actions / sort select ---------- */
+
+.head-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: var(--sp-1);
+}
+
+.sort-select {
+  flex: 0 0 auto;
+  padding: 2px 4px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.sort-select:hover { color: var(--text); border-color: var(--border-strong); }
+
+/* ---------- fatal error card ---------- */
+
+.fatal-card {
+  max-width: 380px;
+  margin: 18vh auto 0;
+  padding: var(--sp-5) var(--sp-6);
+  text-align: center;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+}
+.fatal-card h2 {
+  margin: 0 0 var(--sp-2);
+  font-family: var(--font-display);
+  font-size: var(--fs-lg);
+}
+.fatal-card p {
+  margin: 0 0 var(--sp-4);
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  line-height: 1.5;
+}
+.fatal-card button {
+  padding: 8px 22px;
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius-md);
+}
+
 /* ---------- mobile ---------- */
 
 @media (max-width: 760px) {

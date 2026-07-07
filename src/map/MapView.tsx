@@ -31,6 +31,7 @@ import {
   viewportBounds,
 } from "../store";
 import { loadCore, loadCategory } from "../data/loader";
+import { safeUrl } from "../data/sanitize";
 import { initialView } from "../urlState";
 import { CATEGORIES, CATEGORY_BY_ID, subcategoryLabel } from "../data/taxonomy";
 import { MAP_BOUNDS, MAP_CENTER, INITIAL_ZOOM } from "../data/config";
@@ -133,10 +134,11 @@ function popupHTML(props: PlaceFeature["properties"]): string {
     if (levels) rows.push(`<div>Floors: ${esc(levels)}</div>`);
     if (tags.units) rows.push(`<div>Units: ${esc(tags.units)}</div>`);
     if (tags.operator) rows.push(`<div>Managed by ${esc(tags.operator)}</div>`);
-    const website = tags.website || tags["contact:website"];
+    // OSM tag values are untrusted — only render scheme-safe web URLs.
+    const website = safeUrl(tags.website || tags["contact:website"]);
     if (website) {
       rows.push(
-        `<div><a href="${esc(website)}" target="_blank" rel="noopener">Official website</a></div>`,
+        `<div><a href="${esc(website)}" target="_blank" rel="noopener noreferrer">Official website</a></div>`,
       );
     }
     const links = props.links;
@@ -156,12 +158,12 @@ function popupHTML(props: PlaceFeature["properties"]): string {
   const subLabel = subcategoryLabel(props.category, props.subcategory);
   const detail: string[] = [esc(subLabel)];
   if (props.town) detail.push(esc(props.town));
-  const website = tags.website || tags["contact:website"];
+  const website = safeUrl(tags.website || tags["contact:website"]);
   return `<h3>${name}</h3>
     <p class="pop-sub">${detail.join(" · ")}</p>
     ${
       website
-        ? `<div class="pop-links"><a href="${esc(website)}" target="_blank" rel="noopener">Website</a></div>`
+        ? `<div class="pop-links"><a href="${esc(website)}" target="_blank" rel="noopener noreferrer">Website</a></div>`
         : ""
     }`;
 }
@@ -240,6 +242,14 @@ export function MapView() {
       attributionControl: { compact: true },
     });
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+    map.addControl(
+      new maplibregl.GeolocateControl({
+        positionOptions: { enableHighAccuracy: true },
+        fitBoundsOptions: { maxZoom: 14 },
+        showUserLocation: true,
+      }),
+      "top-right",
+    );
     map.addControl(new ResetViewControl(), "top-right");
     map.addControl(new maplibregl.ScaleControl({ unit: "imperial" }), "bottom-left");
 
@@ -461,6 +471,17 @@ export function MapView() {
     }
     map.on("moveend", onMoveEnd);
 
+    // Esc closes the popup and clears the selection ring from anywhere.
+    function onKeyDown(ev: KeyboardEvent): void {
+      if (ev.key !== "Escape") return;
+      if (popup) {
+        popup.remove();
+        popup = null;
+      }
+      if (selectedPlaceId.peek() !== null) selectedPlaceId.value = null;
+    }
+    document.addEventListener("keydown", onKeyDown);
+
     // ---- Style lifecycle ----
     // style.load fires on initial load AND after every setStyle (theme swap /
     // fallback). Custom sources/layers are wiped by setStyle, so reset our
@@ -552,6 +573,7 @@ export function MapView() {
 
     // ---- Cleanup ----
     return () => {
+      document.removeEventListener("keydown", onKeyDown);
       for (const dispose of disposers) dispose();
       syncAllDebounced.cancel();
       popup?.remove();

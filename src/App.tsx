@@ -3,8 +3,9 @@ import { SearchBox } from "./components/SearchBox";
 import { Sidebar } from "./components/Sidebar";
 import { TownsPanel } from "./components/TownsPanel";
 import { ApartmentTiles } from "./components/ApartmentTiles";
-import { MoonIcon, SunIcon } from "./components/icons";
-import { categoriesMeta, setTheme, theme } from "./store";
+import { WelcomeOverlay } from "./components/WelcomeOverlay";
+import { InfoIcon, MoonIcon, SunIcon } from "./components/icons";
+import { categoriesMeta, setTheme, theme, welcomeOpen } from "./store";
 
 export function App() {
   return (
@@ -21,6 +22,7 @@ export function App() {
       <main class="map-col">
         <MapView />
       </main>
+      <WelcomeOverlay />
     </>
   );
 }
@@ -58,15 +60,28 @@ function Header() {
           </p>
         ) : null}
       </div>
-      <button
-        class="theme-toggle"
-        type="button"
-        title={mode === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-        aria-label={mode === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-        onClick={() => setTheme(mode === "dark" ? "light" : "dark")}
-      >
-        {mode === "dark" ? <SunIcon /> : <MoonIcon />}
-      </button>
+      <div class="head-actions">
+        <button
+          class="theme-toggle"
+          type="button"
+          title="About this map"
+          aria-label="About this map"
+          onClick={() => {
+            welcomeOpen.value = true;
+          }}
+        >
+          <InfoIcon />
+        </button>
+        <button
+          class="theme-toggle"
+          type="button"
+          title={mode === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+          aria-label={mode === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+          onClick={() => setTheme(mode === "dark" ? "light" : "dark")}
+        >
+          {mode === "dark" ? <SunIcon /> : <MoonIcon />}
+        </button>
+      </div>
     </header>
   );
 }

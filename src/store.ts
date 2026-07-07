@@ -41,6 +41,28 @@ export function setTheme(next: Theme): void {
   }
 }
 
+// ---- Welcome overlay (shown on first visit, reopenable from the header) ----
+const WELCOME_KEY = "bwc-welcomed";
+
+function initialWelcome(): boolean {
+  try {
+    return localStorage.getItem(WELCOME_KEY) !== "1";
+  } catch {
+    return false; // no storage (tests/private mode): don't nag every load
+  }
+}
+
+export const welcomeOpen = signal<boolean>(initialWelcome());
+
+export function dismissWelcome(): void {
+  welcomeOpen.value = false;
+  try {
+    localStorage.setItem(WELCOME_KEY, "1");
+  } catch {
+    /* non-fatal */
+  }
+}
+
 // ---- Data-loading status ----
 export type LoadStatus = "idle" | "loading" | "ready" | "error";
 
@@ -143,12 +165,17 @@ export function matchesSearch(
   );
 }
 
+// Tile-grid sort order.
+export type TileSort = "name" | "town";
+export const tileSort = signal<TileSort>("name");
+
 // Filtered apartment list for the tiles panel (search + subcategory + viewport
-// aware), sorted by name so the render cap keeps a deterministic, useful set.
+// aware), sorted so the render cap keeps a deterministic, useful set.
 export const visibleApartments = computed<Apartment[]>(() => {
   const q = searchQuery.value.trim();
   const bounds = viewportBounds.value;
   const filters = activeFilters.value;
+  const sort = tileSort.value;
   const out = apartments.value.filter((a) => {
     if (!filters.has(`apartments:${a.subcategory}`)) return false;
     if (!matchesSearch(a.name, a.town, q)) return false;
@@ -158,5 +185,19 @@ export const visibleApartments = computed<Apartment[]>(() => {
     }
     return true;
   });
-  return out.sort((a, b) => a.name.localeCompare(b.name));
+  return out.sort((a, b) =>
+    sort === "town"
+      ? (a.town ?? "").localeCompare(b.town ?? "") || a.name.localeCompare(b.name)
+      : a.name.localeCompare(b.name),
+  );
+});
+
+// Apartment count per town name (for the towns panel).
+export const apartmentsPerTown = computed<Map<string, number>>(() => {
+  const map = new Map<string, number>();
+  for (const a of apartments.value) {
+    if (!a.town) continue;
+    map.set(a.town, (map.get(a.town) ?? 0) + 1);
+  }
+  return map;
 });

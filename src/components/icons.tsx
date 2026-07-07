@@ -76,6 +76,14 @@ export const MinusIcon = (p: IconProps) => (
   </svg>
 );
 
+export const InfoIcon = (p: IconProps) => (
+  <svg {...base} {...p}>
+    <circle cx="8" cy="8" r="6.5" />
+    <path d="M8 7.5V11.5" />
+    <circle cx="8" cy="5" r="0.25" fill="currentColor" stroke-width="1" />
+  </svg>
+);
+
 export const CATEGORY_ICONS = {
   apartments: BuildingIcon,
   food: FoodIcon,

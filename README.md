@@ -18,7 +18,10 @@ entertainment**, broken into subcategories you can toggle on the map.
 - **Light & dark themes** — follows your system, toggle in the header, persisted
 - **Shareable deep links** — the viewport and active filters live in the URL
 - **Keyless vector basemap** (OpenFreeMap) with an automatic raster fallback
-- Loading skeletons, error states with retry, keyboard-accessible controls
+- **Welcome/About dialog** with data attribution (reopen via the ? button)
+- Geolocate ("near me") control, per-town apartment counts, tile sorting
+- Loading skeletons, error states with retry, keyboard-accessible controls,
+  error boundary
 
 ## Quick start
 
@@ -101,6 +104,23 @@ The site then lives at `https://<user>.github.io/Apartments/`.
 Stack: **Bun · Vite · TypeScript · Preact · @preact/signals · MapLibre GL** —
 ~15 kB gzipped app bundle, code-split MapLibre, brotli/gzip pre-compression,
 bundled fonts (Fraunces + Instrument Sans, no external font requests).
+
+## Security
+
+- OSM tag values (websites etc.) are untrusted input: HTML-escaped **and**
+  scheme-checked (`safeUrl` — http/https only) before rendering.
+- A **Content-Security-Policy** meta tag is injected at build time
+  (`vite.config.ts`): scripts/styles/fonts self-only, network limited to the
+  two tile hosts, `object-src 'none'`. GitHub Pages can't send response
+  headers, so `frame-ancestors` can't be enforced (meta limitation).
+- **Dependabot** watches npm + GitHub Actions weekly; **CI** typechecks,
+  tests, and builds every push/PR.
+
+## Sharing / SEO
+
+`index.html` ships canonical + Open Graph + Twitter-card meta and JSON-LD.
+The share image `public/og.png` is generated from `scripts/og-template.html`
+(regeneration instructions in the file header).
 
 ## Notes & limits
 
