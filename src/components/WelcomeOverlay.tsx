@@ -69,6 +69,10 @@ export function WelcomeOverlay() {
           not here.
         </p>
 
+        <p class="overlay-fineprint">
+          Built by Jaden · <a href="https://j4den.com" target="_blank" rel="noopener noreferrer">j4den.com</a>
+        </p>
+
         <button ref={closeRef} class="overlay-close" type="button" onClick={dismissWelcome}>
           Start exploring
         </button>

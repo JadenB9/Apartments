@@ -1,5 +1,9 @@
 # Corridor & Co. 🗺️
 
+> A [j4den.com](https://j4den.com) project · live at
+> [jadenb9.github.io/Apartments](https://jadenb9.github.io/Apartments/) once
+> merged to `main`
+
 A fast, lightweight web app mapping **the Baltimore–Washington corridor** — the
 area *between* Baltimore City and Washington, DC (Columbia, Laurel, Jessup,
 Odenton, Hanover, Glen Burnie, Bowie, Annapolis, and ~20 more towns).
