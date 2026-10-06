@@ -24,9 +24,7 @@ import { resolve } from "node:path";
 import { BBOX } from "../src/data/config";
 import { classify } from "../src/data/taxonomy";
 import { CATEGORIES } from "../src/data/taxonomy";
-import { buildApartmentLinks } from "../src/data/links";
 import type {
-  Apartment,
   CategoriesPayload,
   CategoryId,
   FeatureCollection,
@@ -305,8 +303,8 @@ function nearestTown(lat: number, lng: number, towns: Town[]): string | undefine
   return best;
 }
 
-/** Build a GeoJSON Point feature from a Place/Apartment. */
-function toFeature(place: Place & Partial<Apartment>): PlaceFeature {
+/** Build a GeoJSON Point feature from a Place. */
+function toFeature(place: Place): PlaceFeature {
   return {
     type: "Feature",
     geometry: { type: "Point", coordinates: [place.lng, place.lat] },
@@ -429,7 +427,9 @@ function buildCounties(elements: OverpassElement[]): County[] {
   const counties: County[] = [];
   for (const el of elements) {
     if (el.type !== "relation" || !el.members?.length) continue;
-    const name = el.tags?.name;
+    // Baltimore City is its own county-equivalent; OSM names it just
+    // "Baltimore", which reads like a typo next to "Baltimore County".
+    const name = el.tags?.name === "Baltimore" ? "Baltimore City" : el.tags?.name;
     if (!name) continue;
     const outerWays = el.members
       .filter((m) => m.role === "outer" && m.geometry && m.geometry.length > 1)
@@ -520,7 +520,7 @@ function countiesFeatureCollection(counties: County[]): unknown {
 // ---------------------------------------------------------------------------
 
 interface NormalizeResult {
-  apartments: Apartment[];
+  apartments: Place[];
   food: Place[];
   shopping: Place[];
   entertainment: Place[];
@@ -573,6 +573,9 @@ function normalize(
 
     const { category, subcategory } = classified;
     const name = deriveName(tags, category);
+    // A nameless pitch or playground is just noise in the nearby list (they
+    // were ~3/4 of the entertainment file), so unnamed amenities are skipped.
+    if (category !== "apartments" && name === "Unnamed") continue;
     const address = composeAddress(tags);
     const addrCity = tags["addr:city"];
     const town =
@@ -594,18 +597,7 @@ function normalize(
     };
 
     if (category === "apartments") {
-      const apt: Apartment = {
-        ...base,
-        category: "apartments",
-        links: buildApartmentLinks({
-          name,
-          lat: coords.lat,
-          lng: coords.lng,
-          town,
-          address,
-        }),
-      };
-      result.apartments.push(apt);
+      result.apartments.push(base);
     } else if (category === "food") {
       result.food.push(base);
     } else if (category === "shopping") {
@@ -627,7 +619,7 @@ function normalize(
  * becomes a dozen dots. Union-find buildings within `thresholdM` of each other
  * (transitively) into one representative point per complex.
  */
-function mergeApartmentComplexes(apts: Apartment[], thresholdM = 80): Apartment[] {
+function mergeApartmentComplexes(apts: Place[], thresholdM = 80): Place[] {
   const n = apts.length;
   const parent = Array.from({ length: n }, (_, i) => i);
   const find = (x: number): number => {
@@ -647,7 +639,7 @@ function mergeApartmentComplexes(apts: Apartment[], thresholdM = 80): Apartment[
     !name || name === "Unnamed" || /^Apartment Building/.test(name);
   // Two buildings may merge only if at least one is generic, or they share a
   // name — so distinct named complexes that sit close stay separate.
-  const mergeable = (a: Apartment, b: Apartment) =>
+  const mergeable = (a: Place, b: Place) =>
     isGenericName(a.name) || isGenericName(b.name) || a.name === b.name;
 
   // Spatial grid (~thresholdM cells) so we only compare nearby buildings.
@@ -694,7 +686,7 @@ function mergeApartmentComplexes(apts: Apartment[], thresholdM = 80): Apartment[
   const isGeneric = (name: string) =>
     !name || name === "Unnamed" || /^Apartment Building/.test(name);
 
-  const result: Apartment[] = [];
+  const result: Place[] = [];
   for (const idxs of groups.values()) {
     const members = idxs.map((i) => apts[i]);
     const rep = members.find((m) => !isGeneric(m.name)) ?? members[0];
@@ -737,7 +729,6 @@ function mergeApartmentComplexes(apts: Apartment[], thresholdM = 80): Apartment[
       ...(town ? { town } : {}),
       ...(address ? { address } : {}),
       ...(tags ? { tags } : {}),
-      links: buildApartmentLinks({ name: rep.name, lat, lng, town, address }),
     });
   }
   return result;
@@ -854,7 +845,6 @@ async function main() {
       lng: x.lng,
       ...(town ? { town } : {}),
       tags: { source: "manual" },
-      links: buildApartmentLinks({ name: x.name, lat: x.lat, lng: x.lng, town }),
     });
   }
   console.log(`  + ${EXTRA_APARTMENTS.length} hand-added complexes`);

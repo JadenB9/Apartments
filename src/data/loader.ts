@@ -8,6 +8,7 @@ import type {
   FeatureCollection,
   Town,
 } from "./types";
+import { buildApartmentLinks } from "./links";
 import {
   apartments,
   categoriesMeta,
@@ -32,6 +33,13 @@ export async function loadCore(): Promise<void> {
   ]);
   categoriesMeta.value = meta;
   towns.value = townList;
+  // Outbound links aren't baked into the JSON; build them here so they always
+  // follow the rules in links.ts. Written onto the feature too, since the map
+  // popup reads the feature's properties.
+  for (const f of aptFC.features) {
+    const p = f.properties;
+    p.links = buildApartmentLinks({ name: p.name, lat: p.lat, lng: p.lng, town: p.town });
+  }
   apartments.value = aptFC.features.map((f) => f.properties as Apartment);
   categoryData.value = { ...categoryData.value, apartments: aptFC };
 }

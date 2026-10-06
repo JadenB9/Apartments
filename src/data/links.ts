@@ -1,6 +1,6 @@
-// Outbound link builders for apartment tiles.
-// Used by the fetch pipeline (to bake links into apartments.json) and as a
-// fallback in the UI.
+// Outbound link builders for apartment tiles. Built at load time (see
+// loader.ts) rather than baked into apartments.json, so a fix here applies
+// without regenerating the data.
 
 export interface PlaceLinkInput {
   name?: string;
