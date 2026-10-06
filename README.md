@@ -7,7 +7,11 @@ Odenton, Hanover, Glen Burnie, Bowie, Annapolis, and ~20 more towns).
 It plots **every apartment building** as a clickable tile (each links out to
 Google Maps, Apartments.com, and Zillow), plus **food, shopping, and
 entertainment**, broken down into categories and subcategories you can toggle on
-the map.
+the map. Search finds any town or complex, the list sorts by area, name or
+distance to Fort Meade, and bookmarks/custom pins are saved in the browser.
+Light and dark themes follow j4den.com's saved choice.
+
+Live at **https://j4den.com/apartments/**.
 
 ## Stack (built for speed)
 
@@ -31,15 +35,28 @@ bun run build      # -> dist/ (static, deploy anywhere)
 bun run preview
 ```
 
+### Publishing to j4den.com
+
+The site serves the app from `/apartments/`, so build with that base path and
+copy the output (minus the pre-compressed `.br`/`.gz` copies — Cloudflare
+compresses on its own) into the j4den repo:
+
+```bash
+bun run build:j4den
+rsync -a --delete --exclude '*.br' --exclude '*.gz' dist/ ../j4den/frontend/public/apartments/
+```
+
 ## Where the data comes from
 
 All places are sourced from **OpenStreetMap** via the **Overpass API** and baked
 into `public/data/*.json` at build time:
 
 - `apartments.json` — every `building=apartments` (+ residential/condo) building,
-  each with `links` to Google Maps / Apartments.com / Zillow.
-- `food.json`, `shopping.json`, `entertainment.json` — POIs classified into
-  subcategories (cuisine types, grocery/mall/clothing, cinema/parks/fitness, …).
+  merged into one point per complex. The Google Maps / Apartments.com / Zillow
+  links are built in the browser from `src/data/links.ts`.
+- `food.json`, `shopping.json`, `entertainment.json` — named POIs classified
+  into subcategories (cuisine types, grocery/mall/clothing, cinema/parks/fitness,
+  …). Unnamed ones (mostly sports pitches) are skipped.
 - `towns.json` — every town/village/suburb in the corridor.
 - `categories.json` — the taxonomy + live counts.
 
@@ -56,18 +73,13 @@ bun run fetch-data   # queries Overpass, regenerates public/data/*.json
 > reachable, or relax the environment's network policy. See
 > https://code.claude.com/docs/en/claude-code-on-the-web for network policies.
 
-### Seed data (works offline)
+### Seed data (offline demo only)
 
-So the app is usable without network, a **demonstrative seed dataset** ships in
-`public/data/` (real corridor towns + plausibly-named complexes/POIs at
-approximate coordinates, tagged `seed:"true"`). Regenerate it with:
-
-```bash
-bun run seed-data
-```
-
-Running `bun run fetch-data` **replaces** the seed with the full, authoritative
-OpenStreetMap dataset.
+`public/data/` holds the real OpenStreetMap dataset. `bun run seed-data`
+overwrites it with a **made-up demo set** (real town names, invented
+complexes/POIs tagged `seed:"true"`) for working without network — don't
+commit or publish that output; run `bun run fetch-data` to restore the real
+data.
 
 ## How it works
 
@@ -83,7 +95,8 @@ OpenStreetMap dataset.
 
 ### Basemap
 
-Uses keyless CARTO dark raster tiles by default. For maximum speed/offline use,
+Uses keyless Esri World Imagery (satellite) with Esri road/label overlays. For
+maximum speed/offline use,
 swap in a self-hosted **Protomaps `.pmtiles`** regional extract (see the comment
 at the top of `src/map/MapView.tsx`).
 

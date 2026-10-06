@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:j4den": "tsc --noEmit && vite build --base=/apartments/",
     "preview": "vite preview",
     "fetch-data": "bun run scripts/fetch-data.ts",
     "seed-data": "bun run scripts/seed-data.ts"
