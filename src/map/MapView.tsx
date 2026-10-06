@@ -1,6 +1,6 @@
 // MapView — the map layer for the Baltimore–Washington corridor app.
 //
-// Renders a MapLibre GL map (keyless CARTO dark raster basemap), one clustered
+// Renders a MapLibre GL map (keyless Esri satellite basemap), one clustered
 // source/layer set per category, a clickable apartments layer, and wires itself
 // into the shared signal store (filters, selection, viewport, mapActions).
 //
@@ -32,6 +32,7 @@ import {
   enabledCategories,
   isBookmarked,
   mapActions,
+  milesBetween,
   nearbyFocus,
   nearbyRadiusMi,
   pinPlacingMode,
@@ -48,7 +49,7 @@ import {
 import { loadCore, loadCategory } from "../data/loader";
 import { googleMapsLink } from "../data/links";
 import { CATEGORIES, CATEGORY_BY_ID } from "../data/taxonomy";
-import { MAP_BOUNDS, MAP_CENTER, INITIAL_ZOOM } from "../data/config";
+import { FORT_MEADE_CENTER, MAP_BOUNDS, MAP_CENTER, INITIAL_ZOOM } from "../data/config";
 import type { CategoryId, PlaceFeature } from "../data/types";
 
 const CATEGORY_IDS: CategoryId[] = CATEGORIES.map((c) => c.id);
@@ -115,18 +116,6 @@ function bookmarkRadiusExpr(ids: string[]): ExpressionSpecification {
 
 const EMPTY_FC: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
 
-// Great-circle distance in miles.
-function haversineMi(aLng: number, aLat: number, bLng: number, bLat: number): number {
-  const toRad = (d: number) => (d * Math.PI) / 180;
-  const R = 3958.7613; // earth radius, miles
-  const dLat = toRad(bLat - aLat);
-  const dLng = toRad(bLng - aLng);
-  const h =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(h));
-}
-
 // Apartments limited to the currently selected towns (empty when none selected).
 function selectedApartmentFC(): GeoJSON.FeatureCollection {
   const fc = categoryData.value.apartments;
@@ -139,16 +128,20 @@ function selectedApartmentFC(): GeoJSON.FeatureCollection {
   return { type: "FeatureCollection", features: features as unknown as GeoJSON.Feature[] };
 }
 
-// POI category data, narrowed to the nearby radius when a focus is active.
+// POI category data limited to the enabled subcategories, and narrowed to the
+// nearby radius when a focus is active. Filtering the source (not just the
+// point layer) keeps cluster bubbles from counting hidden places.
 function poiSourceFC(cat: CategoryId): GeoJSON.FeatureCollection {
   const fc = categoryData.value[cat];
-  if (!fc) return EMPTY_FC;
+  const subs = new Set(activeSubsFor(cat));
+  if (!fc || subs.size === 0) return EMPTY_FC;
   const focus = nearbyFocus.value;
-  if (!focus) return fc as unknown as GeoJSON.FeatureCollection;
   const radius = nearbyRadiusMi.value;
   const features = fc.features.filter((f) => {
+    if (!subs.has(f.properties.subcategory)) return false;
+    if (!focus) return true;
     const [lng, lat] = f.geometry.coordinates;
-    return haversineMi(lng, lat, focus.lng, focus.lat) <= radius;
+    return milesBetween(lng, lat, focus.lng, focus.lat) <= radius;
   });
   return { type: "FeatureCollection", features: features as unknown as GeoJSON.Feature[] };
 }
@@ -180,53 +173,53 @@ const CLUSTER_CFG: Record<CategoryId, { radius: number; maxZoom: number }> = {
 
 const POPUP_STYLE_ID = "mapview-popup-style";
 
-// Inject a small style block so popups match the warm light theme.
+// Inject a small style block so popups and controls follow the app theme.
 function ensurePopupStyles(): void {
   if (document.getElementById(POPUP_STYLE_ID)) return;
   const el = document.createElement("style");
   el.id = POPUP_STYLE_ID;
   el.textContent = `
 .maplibregl-popup.mv-popup .maplibregl-popup-content {
-  background: #fffdf8;
-  color: #2a2620;
-  border: 1px solid #ddd3c0;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
   border-radius: 10px;
   padding: 11px 13px;
   font: 13px/1.4 system-ui, sans-serif;
   max-width: 260px;
-  box-shadow: 0 8px 24px rgba(60,50,30,0.18);
+  box-shadow: 0 8px 24px var(--shadow);
 }
-.maplibregl-popup.mv-popup .maplibregl-popup-tip { border-top-color: #fffdf8; border-bottom-color: #fffdf8; }
-.maplibregl-popup.mv-popup .maplibregl-popup-close-button { color: #857b68; font-size: 16px; }
-.mv-popup h3 { margin: 0 0 4px; font-size: 14px; color: #1f1b16; }
-.mv-popup .mv-sub { color: #857b68; margin: 0 0 6px; font-size: 12px; }
-.mv-popup .mv-tags { margin: 0 0 8px; color: #5f574a; font-size: 12px; }
+.maplibregl-popup.mv-popup .maplibregl-popup-tip { border-top-color: var(--panel); border-bottom-color: var(--panel); }
+.maplibregl-popup.mv-popup .maplibregl-popup-close-button { color: var(--muted); font-size: 16px; }
+.mv-popup h3 { margin: 0 0 4px; padding-right: 14px; font-size: 14px; color: var(--text); }
+.mv-popup .mv-sub { color: var(--muted); margin: 0 0 6px; font-size: 12px; }
+.mv-popup .mv-tags { margin: 0 0 8px; color: var(--muted); font-size: 12px; }
 .mv-popup .mv-tags div { margin: 1px 0; }
 .mv-popup .mv-links { display: flex; gap: 6px; flex-wrap: wrap; }
 .mv-popup .mv-links a {
   display: inline-block;
   padding: 4px 8px;
-  background: #f0eadd;
-  border: 1px solid #ddd3c0;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
   border-radius: 5px;
-  color: #1f6f6b;
+  color: var(--accent);
   text-decoration: none;
   font-size: 11px;
   white-space: nowrap;
 }
-.mv-popup .mv-links a:hover { background: #e6dcc8; }
+.mv-popup .mv-links a:hover { border-color: var(--accent); }
 .mv-popup .mv-bm {
   display: inline-block;
   margin: 0 0 8px;
   padding: 5px 10px;
   font-size: 12px;
   font-weight: 600;
-  color: #1971c2;
-  background: #e7f1fb;
-  border: 1px solid #a5c8ec;
+  color: var(--bookmark);
+  background: var(--bookmark-soft);
+  border: 1px solid var(--bookmark-line);
   border-radius: 6px;
 }
-.mv-popup .mv-bm:hover { background: #d7e7f8; }
+.mv-popup .mv-bm:hover { background: var(--bookmark-hover); }
 .mv-popup .mv-bm.on { color: #fff; background: #1971c2; border-color: #1971c2; }
 .mv-popup .mv-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
 .mv-popup .mv-actions .mv-bm { margin: 0; }
@@ -234,26 +227,32 @@ function ensurePopupStyles(): void {
   padding: 5px 10px;
   font-size: 12px;
   font-weight: 600;
-  color: #2b8a3e;
-  background: #e9f6ec;
-  border: 1px solid #a3d9b1;
+  color: var(--nearby);
+  background: var(--nearby-soft);
+  border: 1px solid var(--nearby-line);
   border-radius: 6px;
 }
-.mv-popup .mv-nearby:hover { background: #dcf0e1; }
+.mv-popup .mv-nearby:hover { background: var(--nearby-hover); }
 .mv-popup .mv-nearby.on { color: #fff; background: #2b8a3e; border-color: #2b8a3e; }
 .mv-popup .mv-pin-remove {
   margin-top: 4px;
   padding: 5px 10px;
   font-size: 12px;
   font-weight: 600;
-  color: #c2255c;
-  background: #ffe3ee;
-  border: 1px solid #f2a9c7;
+  color: var(--pin);
+  background: var(--pin-chip);
+  border: 1px solid var(--pin-line);
   border-radius: 6px;
 }
-.mv-popup .mv-pin-remove:hover { background: #ffd0e3; }
+.mv-popup .mv-pin-remove:hover { border-color: var(--pin-strong); }
 .mv-pin-ctrl button { font-size: 15px; line-height: 29px; }
 .mv-pin-ctrl button.active { background: #e64980; }
+:root[data-theme="dark"] .maplibregl-ctrl-group { background: var(--panel-2); }
+:root[data-theme="dark"] .maplibregl-ctrl-group button + button { border-top-color: var(--border); }
+:root[data-theme="dark"] .maplibregl-ctrl button .maplibregl-ctrl-icon { filter: invert(1); }
+:root[data-theme="dark"] .maplibregl-ctrl-attrib { background: rgba(27, 25, 21, 0.85); color: var(--text); }
+:root[data-theme="dark"] .maplibregl-ctrl-attrib a { color: var(--text); }
+:root[data-theme="dark"] .maplibregl-ctrl-attrib-button { filter: invert(1); }
 `;
   document.head.appendChild(el);
 }
@@ -262,6 +261,14 @@ const esc = (s: string): string =>
   s.replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!),
   );
+
+// Website tags come straight from OpenStreetMap, so only let real http(s)
+// URLs become links (a "javascript:" value would otherwise run on click).
+function safeUrl(raw: string | undefined): string | null {
+  if (!raw) return null;
+  const url = /^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : `https://${raw}`;
+  return /^https?:\/\//i.test(url) ? url : null;
+}
 
 // Active subcategory ids for one category, derived from the global filter set.
 function activeSubsFor(cat: CategoryId): string[] {
@@ -301,9 +308,10 @@ function popupHTML(props: PlaceFeature["properties"]): string {
     tagRows.push(
       `<div>🪖 ${distanceToFortMeadeMi(props.lat, props.lng).toFixed(1)} mi to Fort Meade</div>`,
     );
-    if (tags.website) {
+    const website = safeUrl(tags.website);
+    if (website) {
       tagRows.push(
-        `<div>Website: <a href="${esc(tags.website)}" target="_blank" rel="noopener">link</a></div>`,
+        `<div>Website: <a href="${esc(website)}" target="_blank" rel="noopener">link</a></div>`,
       );
     }
     const links = props.links;
@@ -339,11 +347,19 @@ function popupHTML(props: PlaceFeature["properties"]): string {
     catDef?.subcategories.find((s: { id: string; label: string }) => s.id === props.subcategory)
       ?.label || props.subcategory;
   const tags = props.tags ?? {};
-  const website = tags.website || tags["contact:website"];
+  const website = safeUrl(tags.website || tags["contact:website"]);
   const gmaps = googleMapsLink({ name: props.name, lat: props.lat, lng: props.lng });
+  const details: string[] = [];
+  if (props.address) details.push(`<div>${esc(props.address)}</div>`);
+  if (tags.opening_hours) details.push(`<div>Hours: ${esc(tags.opening_hours)}</div>`);
+  if (tags.phone) {
+    const tel = tags.phone.split(";")[0].replace(/[^\d+]/g, "");
+    details.push(`<div>Phone: <a href="tel:${esc(tel)}">${esc(tags.phone.split(";")[0])}</a></div>`);
+  }
   return `<div class="mv-popup">
     <h3>${name}</h3>
     <p class="mv-sub">${esc(subLabel)}</p>
+    ${details.length ? `<div class="mv-tags">${details.join("")}</div>` : ""}
     <div class="mv-links">
       <a href="${esc(gmaps)}" target="_blank" rel="noopener">Google Maps</a>
       ${website ? `<a href="${esc(website)}" target="_blank" rel="noopener">Website</a>` : ""}
@@ -367,6 +383,15 @@ export function MapView() {
     // blocked. Map layers are installed later by the post-`load` effect, which
     // reads whatever data has arrived by then.
     void loadCore();
+    // The overlay outlines don't depend on the basemap either, so start
+    // fetching them now rather than after the style is up.
+    const base = import.meta.env.BASE_URL || "/";
+    const getOverlay = (file: string) =>
+      fetch(`${base}data/${file}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
+    const fortMeadeReq = getOverlay("fort-meade.json") as Promise<GeoJSON.Feature | null>;
+    const countiesReq = getOverlay("counties.json") as Promise<GeoJSON.FeatureCollection | null>;
 
     // maxBounds: generous padding around MAP_BOUNDS so there's room to pan and
     // look around the edges (toward Baltimore / DC) without loading more data.
@@ -399,6 +424,8 @@ export function MapView() {
         const b = document.createElement("button");
         b.type = "button";
         b.title = "Drop a custom pin, then click the map";
+        b.setAttribute("aria-label", "Drop a custom pin");
+        b.setAttribute("aria-pressed", "false");
         b.textContent = "📍";
         b.addEventListener("click", () => {
           pinPlacingMode.value = !pinPlacingMode.value;
@@ -414,6 +441,13 @@ export function MapView() {
     map.addControl(pinControl, "top-right");
 
     const disposers: Array<() => void> = [];
+
+    // Escape backs out of pin-placing mode.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && pinPlacingMode.value) pinPlacingMode.value = false;
+    };
+    window.addEventListener("keydown", onKey);
+    disposers.push(() => window.removeEventListener("keydown", onKey));
 
     // ---- Adds a clustered source + 3 layers for one category. ----
     function installCategory(cat: CategoryId): void {
@@ -499,26 +533,11 @@ export function MapView() {
       if (!installedRef.current.has(cat)) return;
       const layerIds = [pointLayerId(cat), clusterLayerId(cat), countLayerId(cat)];
 
-      // Apartments: visibility is driven entirely by the source data (selected
-      // towns). Show all of its points/clusters, no subcategory filtering.
-      if (cat === "apartments") {
-        map.setFilter(pointLayerId(cat), ["!", ["has", "point_count"]]);
-        for (const id of layerIds) {
-          if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", "visible");
-        }
-        return;
-      }
-
-      const subs = activeSubsFor(cat);
-      const visible = subs.length > 0 ? "visible" : "none";
-
-      // Filter the unclustered point layer to active subcategories.
-      map.setFilter(pointLayerId(cat), [
-        "all",
-        ["!", ["has", "point_count"]],
-        ["in", ["get", "subcategory"], ["literal", subs]],
-      ]);
-
+      // The source data already holds only what should show (selected towns
+      // for apartments, enabled subcategories for the rest); this just hides
+      // an amenity layer outright while none of its subcategories are on.
+      const visible =
+        cat === "apartments" || activeSubsFor(cat).length > 0 ? "visible" : "none";
       for (const id of layerIds) {
         if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", visible);
       }
@@ -707,15 +726,14 @@ export function MapView() {
     map.on("moveend", onMoveEnd);
 
     // ---- Everything that depends on the style being ready. ----
-    map.on("load", () => {
+    // "style.load" rather than "load": "load" waits for every satellite tile
+    // in view, which held back the dots and labels by seconds.
+    map.once("style.load", () => {
       registerActions();
       onMoveEnd(); // seed initial bounds
 
       // ---- Fort Meade installation outline (real OSM boundary, baked JSON). ----
-      const fmBase = import.meta.env.BASE_URL || "/";
-      fetch(`${fmBase}data/fort-meade.json`)
-        .then((r) => (r.ok ? r.json() : null))
-        .then((geo: GeoJSON.Feature | null) => {
+      fortMeadeReq.then((geo) => {
           if (!geo || map.getSource("src-fort-meade")) return;
           map.addSource("src-fort-meade", { type: "geojson", data: geo });
           map.addLayer({
@@ -735,17 +753,26 @@ export function MapView() {
               "line-dasharray": [3, 2],
             },
           });
+          // One label at the installation's center. Labelling the polygon
+          // itself printed "FORT MEADE" once per piece of the boundary.
+          map.addSource("src-fort-meade-label", {
+            type: "geojson",
+            data: {
+              type: "Feature",
+              properties: {},
+              geometry: { type: "Point", coordinates: FORT_MEADE_CENTER },
+            },
+          });
           map.addLayer({
             id: "fort-meade-label",
             type: "symbol",
-            source: "src-fort-meade",
+            source: "src-fort-meade-label",
             layout: {
               "text-field": "Fort Meade",
               "text-font": LABEL_FONT,
               "text-size": 13,
               "text-letter-spacing": 0.05,
               "text-transform": "uppercase",
-              "symbol-placement": "point",
             },
             paint: {
               "text-color": "#ffe066",
@@ -753,13 +780,10 @@ export function MapView() {
               "text-halo-width": 1.8,
             },
           });
-        })
-        .catch(() => {});
+      });
 
       // ---- County outlines: show the boundary of each selected county. ----
-      fetch(`${fmBase}data/counties.json`)
-        .then((r) => (r.ok ? r.json() : null))
-        .then((fc: GeoJSON.FeatureCollection | null) => {
+      countiesReq.then((fc) => {
           if (!fc || map.getSource("src-counties")) return;
           map.addSource("src-counties", { type: "geojson", data: fc });
           // Insert below Fort Meade so the base stays prominent.
@@ -797,8 +821,7 @@ export function MapView() {
             if (map.getLayer("county-outline")) map.setFilter("county-outline", f);
           });
           disposers.push(countyEffect);
-        })
-        .catch(() => {});
+      });
 
       // ---- Highlight the selected/clicked place so it's obvious when zoomed
       // out (a bright ring that never clusters and always renders). ----
@@ -928,7 +951,10 @@ export function MapView() {
       const placingEffect = effect(() => {
         const on = pinPlacingMode.value;
         map.getCanvas().style.cursor = on ? "crosshair" : "";
-        if (pinBtnRef) pinBtnRef.classList.toggle("active", on);
+        if (pinBtnRef) {
+          pinBtnRef.classList.toggle("active", on);
+          pinBtnRef.setAttribute("aria-pressed", String(on));
+        }
       });
       disposers.push(placingEffect);
 
@@ -1005,11 +1031,11 @@ export function MapView() {
       });
       disposers.push(areaEffect);
 
-      // Narrow POI sources to the nearby radius (or restore full) + draw ring.
+      // Refresh POI sources when filters, the nearby focus/radius or the data
+      // change (poiSourceFC reads all of them), and draw the radius ring.
       const nearbyEffect = effect(() => {
         const focus = nearbyFocus.value;
         const radius = nearbyRadiusMi.value;
-        void categoryData.value;
         for (const cat of ["food", "shopping", "entertainment"] as CategoryId[]) {
           const src = map.getSource(srcId(cat)) as GeoJSONSource | undefined;
           if (src) src.setData(poiSourceFC(cat));
@@ -1061,7 +1087,7 @@ export function MapView() {
       });
       disposers.push(bookmarkEffect);
 
-      // Re-apply per-category subcategory filters whenever they change.
+      // Show/hide amenity layers as their subcategories are toggled.
       const filterEffect = effect(() => {
         // Touch activeFilters so this effect re-runs on every change.
         void activeFilters.value;

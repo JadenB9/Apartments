@@ -1,4 +1,4 @@
-import { useMemo, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { Apartment } from "../data/types";
 import {
   bookmarks,
@@ -12,7 +12,11 @@ import {
 
 const MAX_TILES = 300;
 
-type SortKey = "area" | "name";
+type SortKey = "area" | "name" | "meade";
+
+// Unnamed OSM buildings ("Apartment Building (Foo Street)") sort after the
+// real complexes so the named ones aren't buried.
+const generic = (a: Apartment) => (/^apartment building/i.test(a.name) ? 1 : 0);
 
 // Responsive grid of apartment tiles for the selected areas (∩ search ∩
 // viewport), with sort + bookmarked-only controls. Clicking a tile selects +
@@ -27,12 +31,19 @@ export function ApartmentTiles() {
   const anyArea = selectedTowns.value.size > 0; // subscribe
 
   const list = useMemo(() => {
-    let arr = bookmarkedOnly ? base.filter((a) => bm.has(a.id)) : base.slice();
-    arr.sort((a, b) =>
-      sort === "name"
-        ? a.name.localeCompare(b.name)
-        : (a.town ?? "").localeCompare(b.town ?? "") || a.name.localeCompare(b.name),
-    );
+    const arr = bookmarkedOnly ? base.filter((a) => bm.has(a.id)) : base.slice();
+    if (sort === "meade") {
+      const dist = new Map(arr.map((a) => [a.id, distanceToFortMeadeMi(a.lat, a.lng)]));
+      arr.sort((a, b) => dist.get(a.id)! - dist.get(b.id)!);
+    } else {
+      arr.sort((a, b) =>
+        sort === "name"
+          ? generic(a) - generic(b) || a.name.localeCompare(b.name)
+          : (a.town ?? "").localeCompare(b.town ?? "") ||
+            generic(a) - generic(b) ||
+            a.name.localeCompare(b.name),
+      );
+    }
     return arr;
   }, [base, bm, sort, bookmarkedOnly]);
 
@@ -43,7 +54,10 @@ export function ApartmentTiles() {
   return (
     <section class="apt-panel">
       <div class="apt-panel-header">
-        <span>Apartments{anyArea ? ` (${total})` : ""}</span>
+        <span>
+          Apartments{anyArea ? ` (${total})` : ""}
+          {anyArea ? <span class="apt-sub"> in view</span> : null}
+        </span>
         {anyArea ? (
           <div class="apt-controls">
             <label class="apt-bm-only">
@@ -62,6 +76,7 @@ export function ApartmentTiles() {
             >
               <option value="area">Sort: Area</option>
               <option value="name">Sort: Name</option>
+              <option value="meade">Sort: Ft. Meade</option>
             </select>
           </div>
         ) : null}
@@ -91,11 +106,16 @@ export function ApartmentTiles() {
 }
 
 function Tile({ apt, selected }: { apt: Apartment; selected: boolean }) {
+  const ref = useRef<HTMLDivElement>(null);
   const onOpen = () => {
     selectedPlaceId.value = apt.id;
-    mapActions.value?.flyTo(apt.lng, apt.lat, 16);
     mapActions.value?.openPopup(apt.id);
   };
+
+  // When a dot is clicked on the map, bring its tile into view in the list.
+  useEffect(() => {
+    if (selected) ref.current?.scrollIntoView({ block: "nearest" });
+  }, [selected]);
 
   const links = apt.links;
   const marked = bookmarks.value.has(apt.id);
@@ -103,26 +123,28 @@ function Tile({ apt, selected }: { apt: Apartment; selected: boolean }) {
   const cls =
     "apt-tile" + (selected ? " selected" : "") + (marked ? " bookmarked" : "");
 
+  // The whole tile is clickable with a mouse; for keyboard and screen readers
+  // the name is the button, so the star and links aren't nested inside one.
   return (
-    <div
-      class={cls}
-      role="button"
-      tabIndex={0}
-      onClick={onOpen}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onOpen();
-        }
-      }}
-    >
+    <div class={cls} ref={ref} onClick={onOpen}>
       <div class="apt-row">
-        <div class="apt-name" title={apt.name}>{apt.name || "Unnamed"}</div>
+        <button
+          class="apt-name"
+          type="button"
+          title={apt.name}
+          aria-current={selected ? "true" : undefined}
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpen();
+          }}
+        >
+          {apt.name || "Unnamed"}
+        </button>
         <button
           class={marked ? "apt-star on" : "apt-star"}
           type="button"
           title={marked ? "Remove bookmark" : "Bookmark this apartment"}
-          aria-label={marked ? "Remove bookmark" : "Bookmark this apartment"}
+          aria-label={marked ? `Remove bookmark for ${apt.name}` : `Bookmark ${apt.name}`}
           aria-pressed={marked}
           onClick={(e) => {
             e.stopPropagation();
@@ -135,20 +157,21 @@ function Tile({ apt, selected }: { apt: Apartment; selected: boolean }) {
       {apt.town ? <div class="apt-town">{apt.town}</div> : null}
       <div class="apt-dist">🪖 {distanceToFortMeadeMi(apt.lat, apt.lng).toFixed(1)} mi to Fort Meade</div>
       <div class="apt-links">
-        <LinkBtn href={links?.googleMaps} label="Maps" />
-        <LinkBtn href={links?.apartmentsCom} label="Apts" />
-        <LinkBtn href={links?.zillow} label="Zillow" />
+        <LinkBtn href={links?.googleMaps} label="Maps" title={`${apt.name} on Google Maps`} />
+        <LinkBtn href={links?.apartmentsCom} label="Apts" title="Apartments.com listings nearby" />
+        <LinkBtn href={links?.zillow} label="Zillow" title="Zillow rentals nearby" />
       </div>
     </div>
   );
 }
 
-function LinkBtn({ href, label }: { href?: string; label: string }) {
+function LinkBtn({ href, label, title }: { href?: string; label: string; title: string }) {
   if (!href) return <span class="apt-link disabled">{label}</span>;
   return (
     <a
       class="apt-link"
       href={href}
+      title={title}
       target="_blank"
       rel="noopener noreferrer"
       onClick={(e) => e.stopPropagation()}
@@ -178,6 +201,7 @@ const styles = `
   gap: 3px;
   font-size: 11px;
   color: var(--muted);
+  white-space: nowrap;
   cursor: pointer;
 }
 .apt-bm-only input { accent-color: var(--bookmark); cursor: pointer; }
@@ -211,7 +235,6 @@ const styles = `
   border-left: 3px solid var(--apartments);
   border-radius: 6px;
   cursor: pointer;
-  outline: none;
 }
 .apt-tile:hover { border-color: var(--accent); }
 .apt-tile.selected {
@@ -227,8 +250,15 @@ const styles = `
   align-items: flex-start;
   gap: 6px;
 }
+.apt-panel-header > span { white-space: nowrap; }
+.apt-sub { font-weight: 400; color: var(--muted); font-size: 11px; }
 .apt-name {
   flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  text-align: left;
+  background: transparent;
+  border: none;
   font-size: 12.5px;
   font-weight: 600;
   color: var(--text);
