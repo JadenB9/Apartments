@@ -38,6 +38,8 @@ export function Sidebar() {
           max="10"
           step="0.5"
           value={radius}
+          aria-label="Nearby radius in miles"
+          aria-valuetext={`${radius} miles`}
           onInput={(e) => {
             nearbyRadiusMi.value = Number(e.currentTarget.value);
           }}
@@ -66,7 +68,8 @@ export function Sidebar() {
               <button
                 class="cat-chevron"
                 type="button"
-                aria-label={isOpen ? "Collapse" : "Expand"}
+                aria-label={`${isOpen ? "Collapse" : "Expand"} ${cat.label}`}
+                aria-expanded={isOpen}
                 onClick={() =>
                   setExpanded((e) => ({ ...e, [cat.id]: !e[cat.id] }))
                 }
@@ -77,6 +80,7 @@ export function Sidebar() {
               <button
                 class="cat-label"
                 type="button"
+                aria-expanded={isOpen}
                 onClick={() =>
                   setExpanded((e) => ({ ...e, [cat.id]: !e[cat.id] }))
                 }

@@ -55,6 +55,7 @@ export function NearbyPanel() {
         <button
           class={cat === "all" ? "nb-cat on" : "nb-cat"}
           type="button"
+          aria-pressed={cat === "all"}
           onClick={() => {
             setCat("all");
             setSub("all");
@@ -67,6 +68,7 @@ export function NearbyPanel() {
             key={c}
             class={cat === c ? "nb-cat on" : "nb-cat"}
             type="button"
+            aria-pressed={cat === c}
             style={cat === c ? { borderColor: CATEGORY_BY_ID[c].color } : undefined}
             onClick={() => {
               setCat(c);
@@ -84,6 +86,7 @@ export function NearbyPanel() {
           <select
             class="nb-sub"
             value={sub}
+            aria-label={`Filter ${CAT_SHORT[cat]} by type`}
             onChange={(e) => setSub(e.currentTarget.value)}
           >
             <option value="all">All {CAT_SHORT[cat]} types</option>
@@ -132,12 +135,12 @@ export function NearbyPanel() {
 }
 
 const styles = `
-.nb-panel { border-bottom: 1px solid var(--border); background: #eef3ee; }
+.nb-panel { border-bottom: 1px solid var(--border); background: var(--nearby-soft); }
 .nb-head {
   display: flex; align-items: center; gap: 8px;
   padding: 9px 12px 4px;
 }
-.nb-title { flex: 1 1 auto; font-size: 13px; font-weight: 700; color: var(--entertainment); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nb-title { flex: 1 1 auto; font-size: 13px; font-weight: 700; color: var(--nearby); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .nb-clear {
   flex: 0 0 auto; padding: 2px 8px; font-size: 11px;
   color: var(--muted); background: var(--panel); border: 1px solid var(--border); border-radius: 999px;
@@ -161,8 +164,8 @@ const styles = `
   display: flex; align-items: center; gap: 7px; width: 100%;
   padding: 5px 12px; text-align: left; background: transparent; border: none; cursor: pointer;
 }
-.nb-row:hover { background: #e0ebe1; }
-.nb-row.sel { background: #d3e7d6; }
+.nb-row:hover { background: var(--nearby-hover); }
+.nb-row.sel { background: var(--nearby-sel); }
 .nb-dot { flex: 0 0 auto; width: 9px; height: 9px; border-radius: 50%; border: 1px solid rgba(0,0,0,0.25); }
 .nb-name {
   flex: 1 1 auto; min-width: 0; font-size: 12.5px; color: var(--text);

@@ -87,12 +87,18 @@ export function AreaPanel() {
               <button
                 class="area-chev"
                 type="button"
-                aria-label={open ? "Collapse" : "Expand"}
+                aria-label={`${open ? "Collapse" : "Expand"} ${county}`}
+                aria-expanded={open}
                 onClick={() => toggle(county)}
               >
                 <span class={open ? "chev open" : "chev"}>▸</span>
               </button>
-              <button class="area-county-label" type="button" onClick={() => toggle(county)}>
+              <button
+                class="area-county-label"
+                type="button"
+                aria-expanded={open}
+                onClick={() => toggle(county)}
+              >
                 {county}
               </button>
               <span class="chip">{total}</span>
@@ -140,7 +146,7 @@ export function AreaPanel() {
                           <button
                             class="area-town-name"
                             type="button"
-                            title="Zoom to this town"
+                            title={`Zoom to ${t.name}`}
                             onClick={() => mapActions.value?.flyTo(t.lng, t.lat, 13)}
                           >
                             {t.name}

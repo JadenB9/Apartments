@@ -20,7 +20,12 @@ export function BookmarksPanel() {
 
   return (
     <section class="bm-panel">
-      <button class="bm-head" type="button" onClick={() => setOpen((o) => !o)}>
+      <button
+        class="bm-head"
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
         <span class={open ? "chev open" : "chev"}>▸</span>
         <span class="bm-title">★ Bookmarked ({list.length})</span>
       </button>
@@ -48,7 +53,7 @@ export function BookmarksPanel() {
                 class="bm-remove"
                 type="button"
                 title="Remove bookmark"
-                aria-label="Remove bookmark"
+                aria-label={`Remove bookmark for ${apt.name}`}
                 onClick={() => toggleBookmark(apt.id)}
               >
                 ★
@@ -85,7 +90,7 @@ const styles = `
   gap: 6px;
   padding: 4px 12px;
 }
-.bm-row:hover { background: #dcebfb; }
+.bm-row:hover { background: var(--bookmark-hover); }
 .bm-name {
   flex: 1 1 auto;
   min-width: 0;

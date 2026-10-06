@@ -34,6 +34,24 @@ export function distanceToFortMeadeMi(lat: number, lng: number): number {
   return milesBetween(lng, lat, FORT_MEADE_CENTER[0], FORT_MEADE_CENTER[1]);
 }
 
+// ---- Theme ----
+// index.html sets data-theme before paint; the toggle writes the same
+// localStorage key j4den.com uses, so the choice carries across the site.
+export const theme = signal<"light" | "dark">(
+  document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light",
+);
+
+export function toggleTheme(): void {
+  const next = theme.value === "dark" ? "light" : "dark";
+  theme.value = next;
+  document.documentElement.setAttribute("data-theme", next);
+  try {
+    localStorage.setItem("theme", next);
+  } catch {
+    /* private mode: the choice just won't persist */
+  }
+}
+
 // ---- Loaded data ----
 export const categoriesMeta = signal<CategoriesPayload | null>(null);
 export const towns = signal<Town[]>([]);

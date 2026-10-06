@@ -1,4 +1,3 @@
-import { useEffect } from "preact/hooks";
 import { MapView } from "./map/MapView";
 import { SearchBox } from "./components/SearchBox";
 import { AreaPanel } from "./components/AreaPanel";
@@ -7,19 +6,27 @@ import { PinsPanel } from "./components/PinsPanel";
 import { NearbyPanel } from "./components/NearbyPanel";
 import { Sidebar } from "./components/Sidebar";
 import { ApartmentTiles } from "./components/ApartmentTiles";
+import { theme, toggleTheme } from "./store";
 
 export function App() {
-  // Lock mobile address-bar resize jank; nothing else needed — data loads
-  // lazily from inside MapView (loadCore) and the panels react via signals.
-  useEffect(() => {
-    document.title = "BW Corridor Map — Apartments & Places";
-  }, []);
+  const dark = theme.value === "dark"; // subscribe
 
   return (
     <>
       <aside class="panel-col">
         <header class="app-head">
-          <h1>BW&nbsp;Corridor</h1>
+          <div class="app-head-row">
+            <h1>BW&nbsp;Corridor</h1>
+            <button
+              class="theme-btn"
+              type="button"
+              onClick={toggleTheme}
+              aria-label={dark ? "Switch to light theme" : "Switch to dark theme"}
+              title={dark ? "Light theme" : "Dark theme"}
+            >
+              {dark ? "☀" : "☾"}
+            </button>
+          </div>
           <p>Apartments, food, shopping &amp; entertainment between Baltimore and DC.</p>
         </header>
         <SearchBox />
@@ -53,7 +60,7 @@ const css = `
   padding: 18px 18px 14px;
   border-bottom: 1px solid var(--border);
   background:
-    linear-gradient(180deg, rgba(255,255,255,0.5), rgba(255,255,255,0) 60%),
+    linear-gradient(180deg, var(--head-sheen), transparent 60%),
     var(--panel);
 }
 .app-head h1 {
@@ -74,12 +81,25 @@ const css = `
   line-height: 1.45;
   max-width: 30ch;
 }
-.panel-scroll { flex: 1; overflow-y: auto; min-height: 0; }
+.app-head-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.theme-btn {
+  flex: 0 0 auto;
+  width: 30px; height: 30px; padding: 0;
+  font-size: 15px; line-height: 1;
+  color: var(--muted); background: var(--panel-2);
+  border: 1px solid var(--border); border-radius: 999px;
+}
+.theme-btn:hover { color: var(--text); border-color: var(--accent); }
+/* Bottom padding keeps the last tile clear of j4den's back chip. */
+.panel-scroll { flex: 1; overflow-y: auto; min-height: 0; padding-bottom: 52px; }
 .map-col { position: relative; height: 100%; min-width: 0; }
 .map-col > * { position: absolute; inset: 0; }
 
 @media (max-width: 760px) {
-  #app { grid-template-rows: 45vh 55vh; grid-template-columns: 1fr; }
+  #app { grid-template-rows: 45vh 55vh; grid-template-rows: 45dvh 55dvh; grid-template-columns: 1fr; }
+  .app-head { padding: 10px 14px 8px; }
+  .app-head h1 { font-size: 19px; }
+  .app-head p { display: none; }
   .panel-col { order: 2; border-right: none; border-top: 1px solid var(--border); }
   .map-col { order: 1; }
 }

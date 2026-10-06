@@ -20,6 +20,7 @@ export function PinsPanel() {
         <button
           class={placing ? "pins-add on" : "pins-add"}
           type="button"
+          aria-pressed={placing}
           onClick={() => (pinPlacingMode.value = !placing)}
         >
           {placing ? "Click the map…" : "+ Add pin"}
@@ -27,7 +28,7 @@ export function PinsPanel() {
       </div>
 
       {placing ? (
-        <div class="pins-hint">Click anywhere on the map to drop a pin.</div>
+        <div class="pins-hint">Click anywhere on the map to drop a pin (Esc cancels).</div>
       ) : null}
 
       {pins.length > 0 ? (
@@ -38,13 +39,14 @@ export function PinsPanel() {
                 class="pin-name"
                 value={p.name}
                 aria-label="Pin name"
+                maxLength={60}
                 onChange={(e) => renamePin(p.id, e.currentTarget.value)}
               />
               <button
                 class="pin-go"
                 type="button"
                 title="Zoom to this pin"
-                aria-label="Zoom to pin"
+                aria-label={`Zoom to ${p.name}`}
                 onClick={() => mapActions.value?.flyTo(p.lng, p.lat, 16)}
               >
                 ⤢
@@ -53,7 +55,7 @@ export function PinsPanel() {
                 class="pin-del"
                 type="button"
                 title="Remove pin"
-                aria-label="Remove pin"
+                aria-label={`Remove ${p.name}`}
                 onClick={() => removePin(p.id)}
               >
                 ✕
@@ -70,17 +72,17 @@ export function PinsPanel() {
 }
 
 const styles = `
-.pins-panel { border-bottom: 1px solid var(--border); background: #fdeef5; }
+.pins-panel { border-bottom: 1px solid var(--border); background: var(--pin-soft); }
 .pins-head {
   display: flex; align-items: center; gap: 8px;
   padding: 9px 12px 6px;
 }
-.pins-title { flex: 1 1 auto; font-size: 13px; font-weight: 700; color: #c2255c; }
+.pins-title { flex: 1 1 auto; font-size: 13px; font-weight: 700; color: var(--pin); }
 .pins-add {
   flex: 0 0 auto; padding: 3px 10px; font-size: 11px; font-weight: 600;
-  color: #c2255c; background: #ffe3ee; border: 1px solid #f2a9c7; border-radius: 999px;
+  color: var(--pin); background: var(--pin-chip); border: 1px solid var(--pin-line); border-radius: 999px;
 }
-.pins-add.on { color: #fff; background: #e64980; border-color: #e64980; }
+.pins-add.on { color: #fff; background: var(--pin-strong); border-color: var(--pin-strong); }
 .pins-hint { padding: 0 12px 8px; font-size: 11.5px; color: var(--muted); line-height: 1.4; }
 .pins-list { padding: 0 0 6px; }
 .pin-row {
@@ -93,13 +95,13 @@ const styles = `
   background: var(--panel); border: 1px solid var(--border); border-radius: 5px;
   padding: 4px 6px;
 }
-.pin-name:focus { outline: none; border-color: #e64980; }
+.pin-name:focus { outline: none; border-color: var(--pin-strong); }
 .pin-go, .pin-del {
   flex: 0 0 auto; width: 24px; height: 24px; padding: 0;
   font-size: 12px; line-height: 1;
   background: var(--panel); border: 1px solid var(--border); border-radius: 5px;
   color: var(--muted); cursor: pointer;
 }
-.pin-go:hover { color: #c2255c; border-color: #f2a9c7; }
-.pin-del:hover { color: #c2255c; border-color: #f2a9c7; }
+.pin-go:hover { color: var(--pin); border-color: var(--pin-line); }
+.pin-del:hover { color: var(--pin); border-color: var(--pin-line); }
 `;
